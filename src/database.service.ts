@@ -4,6 +4,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
+import { randomBytes, scryptSync } from 'crypto';
 import { Pool } from 'pg';
 import type {
   BusinessAdmin,
@@ -50,6 +51,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.query('SELECT 1');
     await this.createSchema();
     await this.seedIfNeeded();
+    await this.upgradeStoredSecrets();
     this.ready = true;
     this.logger.log('PostgreSQL ulanishi tayyor');
   }
@@ -156,7 +158,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async getStores(): Promise<Store[]> {
     const result = await this.query(
-      `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password, role, address
+      `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
+              last_issued_password AS "lastIssuedPassword", role, address
        FROM stores
        ORDER BY id ASC`,
     );
@@ -171,7 +174,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            full_name = $2,
            phone = $3,
            password = $4,
-           address = $5
+           last_issued_password = $5,
+           address = $6
          WHERE id = $1
          RETURNING
            id,
@@ -179,6 +183,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            full_name AS "fullName",
            phone,
            password,
+           last_issued_password AS "lastIssuedPassword",
            role,
            address`,
         [
@@ -186,6 +191,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           payload.fullName,
           payload.phone,
           payload.password,
+          payload.lastIssuedPassword,
           payload.address,
         ],
       );
@@ -194,14 +200,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const result = await this.query(
       `INSERT INTO stores
-        (tenant_id, full_name, phone, password, role, address)
-       VALUES ($1, $2, $3, $4, 'client', $5)
+        (tenant_id, full_name, phone, password, last_issued_password, role, address)
+       VALUES ($1, $2, $3, $4, $5, 'client', $6)
        RETURNING
          id,
          tenant_id AS "tenantId",
          full_name AS "fullName",
          phone,
          password,
+         last_issued_password AS "lastIssuedPassword",
          role,
          address`,
       [
@@ -209,6 +216,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         payload.fullName,
         payload.phone,
         payload.password,
+        payload.lastIssuedPassword,
         payload.address,
       ],
     );
@@ -241,6 +249,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           full_name AS "fullName",
           phone,
           password,
+          last_issued_password AS "lastIssuedPassword",
           role
        FROM business_admins
        ORDER BY id ASC`,
@@ -348,7 +357,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async resolvePasswordResetRequest(
     requestId: number,
-    newPassword: string,
+    passwordHash: string,
+    lastIssuedPassword: string,
   ): Promise<PasswordResetRequest | null> {
     const current = await this.query(
       `SELECT id, store_id AS "storeId"
@@ -364,10 +374,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return null;
     }
 
-    await this.query(`UPDATE stores SET password = $2 WHERE id = $1`, [
-      request.storeId,
-      newPassword,
-    ]);
+    await this.query(
+      `UPDATE stores
+       SET password = $2, last_issued_password = $3
+       WHERE id = $1`,
+      [
+        request.storeId,
+        passwordHash,
+        lastIssuedPassword,
+      ],
+    );
 
     const result = await this.query(
       `UPDATE password_reset_requests
@@ -479,6 +495,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     fullName: string,
     phone: string,
     password: string,
+    lastIssuedPassword: string,
   ): Promise<BusinessAdmin> {
     const existing = await this.query(
       `SELECT id FROM business_admins WHERE tenant_id = $1 LIMIT 1`,
@@ -489,6 +506,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       const result = await this.query(
         `UPDATE business_admins
          SET full_name = $2, phone = $3, password = $4
+           , last_issued_password = $5
          WHERE tenant_id = $1
          RETURNING
            id,
@@ -496,24 +514,26 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            full_name AS "fullName",
            phone,
            password,
+           last_issued_password AS "lastIssuedPassword",
            role`,
-        [tenantId, fullName, phone, password],
+        [tenantId, fullName, phone, password, lastIssuedPassword],
       );
       return result.rows[0] as BusinessAdmin;
     }
 
     const result = await this.query(
       `INSERT INTO business_admins
-        (tenant_id, full_name, phone, password, role)
-       VALUES ($1, $2, $3, $4, 'business_admin')
+        (tenant_id, full_name, phone, password, last_issued_password, role)
+       VALUES ($1, $2, $3, $4, $5, 'business_admin')
        RETURNING
          id,
          tenant_id AS "tenantId",
          full_name AS "fullName",
          phone,
          password,
+         last_issued_password AS "lastIssuedPassword",
          role`,
-      [tenantId, fullName, phone, password],
+      [tenantId, fullName, phone, password, lastIssuedPassword],
     );
     return result.rows[0] as BusinessAdmin;
   }
@@ -607,6 +627,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         full_name TEXT NOT NULL,
         phone TEXT NOT NULL UNIQUE,
         password TEXT NOT NULL,
+        last_issued_password TEXT NULL,
         role TEXT NOT NULL,
         address TEXT NOT NULL
       );
@@ -617,6 +638,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         full_name TEXT NOT NULL,
         phone TEXT NOT NULL UNIQUE,
         password TEXT NOT NULL,
+        last_issued_password TEXT NULL,
         role TEXT NOT NULL
       );
 
@@ -651,8 +673,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
       ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER NOT NULL DEFAULT 10;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE stores ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
+      ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
     `);
   }
 
@@ -688,15 +712,16 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const admin of seedBusinessAdmins) {
         await this.query(
           `INSERT INTO business_admins
-            (id, tenant_id, full_name, phone, password, role)
+            (id, tenant_id, full_name, phone, password, last_issued_password, role)
            OVERRIDING SYSTEM VALUE
-           VALUES ($1, $2, $3, $4, $5, $6)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
           [
             admin.id,
             admin.tenantId,
             admin.fullName,
             admin.phone,
             admin.password,
+            admin.lastIssuedPassword ?? admin.password,
             admin.role,
           ],
         );
@@ -735,14 +760,15 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (storeCount.rows[0].count === 0) {
       for (const store of seedStores) {
         await this.query(
-          `INSERT INTO stores (id, tenant_id, full_name, phone, password, role, address)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          `INSERT INTO stores (id, tenant_id, full_name, phone, password, last_issued_password, role, address)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             store.id,
             store.tenantId,
             store.fullName,
             store.phone,
             store.password,
+            store.lastIssuedPassword ?? store.password,
             store.role,
             store.address,
           ],
@@ -775,5 +801,56 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         );
       }
     }
+  }
+
+  private async upgradeStoredSecrets() {
+    const businessAdmins = await this.query(
+      `SELECT id, password, last_issued_password AS "lastIssuedPassword"
+       FROM business_admins`,
+    );
+    for (const admin of businessAdmins.rows as Array<{
+      id: number;
+      password: string;
+      lastIssuedPassword?: string | null;
+    }>) {
+      const visiblePassword = admin.lastIssuedPassword ?? admin.password;
+      const protectedPassword = this.protectPassword(admin.password);
+      await this.query(
+        `UPDATE business_admins
+         SET password = $2, last_issued_password = $3
+         WHERE id = $1`,
+        [admin.id, protectedPassword, visiblePassword],
+      );
+    }
+
+    const stores = await this.query(
+      `SELECT id, password, last_issued_password AS "lastIssuedPassword"
+       FROM stores`,
+    );
+    for (const store of stores.rows as Array<{
+      id: number;
+      password: string;
+      lastIssuedPassword?: string | null;
+    }>) {
+      const visiblePassword = store.lastIssuedPassword ?? store.password;
+      const protectedPassword = this.protectPassword(store.password);
+      await this.query(
+        `UPDATE stores
+         SET password = $2, last_issued_password = $3
+         WHERE id = $1`,
+        [store.id, protectedPassword, visiblePassword],
+      );
+    }
+  }
+
+  private protectPassword(password: string): string {
+    const clean = password.trim();
+    if (!clean || clean.startsWith('scrypt$')) {
+      return clean;
+    }
+
+    const salt = randomBytes(8).toString('hex');
+    const hash = scryptSync(clean, salt, 32).toString('hex');
+    return `scrypt$${salt}$${hash}`;
   }
 }

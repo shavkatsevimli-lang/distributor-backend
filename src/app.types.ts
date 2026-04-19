@@ -32,6 +32,7 @@ export interface Store {
   fullName: string;
   phone: string;
   password: string;
+  lastIssuedPassword?: string;
   role: 'client';
   address: string;
 }
@@ -45,6 +46,9 @@ export interface Tenant {
   maxStores: number;
   subscriptionEndsAt: string;
   locale: 'uz' | 'ru' | 'en';
+  adminFullName?: string;
+  adminPhone?: string;
+  adminPassword?: string;
 }
 
 export interface BusinessAdmin {
@@ -53,6 +57,7 @@ export interface BusinessAdmin {
   fullName: string;
   phone: string;
   password: string;
+  lastIssuedPassword?: string;
   role: 'business_admin';
 }
 
@@ -169,6 +174,7 @@ export interface SaveStorePayload {
   fullName?: string;
   phone?: string;
   password?: string;
+  lastIssuedPassword?: string;
   address?: string;
 }
 

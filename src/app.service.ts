@@ -3,6 +3,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 import { DatabaseService } from './database.service';
 import {
   AdminDashboard,
@@ -40,8 +41,16 @@ import {
 export class AppService {
   private readonly products: Product[] = [...seedProducts];
   private readonly tenants: Tenant[] = [...seedTenants];
-  private readonly businessAdmins: BusinessAdmin[] = [...seedBusinessAdmins];
-  private readonly stores: Store[] = [...seedStores];
+  private readonly businessAdmins: BusinessAdmin[] = seedBusinessAdmins.map((admin) => ({
+    ...admin,
+    lastIssuedPassword: admin.lastIssuedPassword ?? admin.password,
+    password: this.protectPassword(admin.password),
+  }));
+  private readonly stores: Store[] = seedStores.map((store) => ({
+    ...store,
+    lastIssuedPassword: store.lastIssuedPassword ?? store.password,
+    password: this.protectPassword(store.password),
+  }));
   private readonly orders: Order[] = [...seedOrders];
   private readonly passwordResetRequests: PasswordResetRequest[] = [];
 
@@ -49,7 +58,7 @@ export class AppService {
     id: 999,
     fullName: process.env.OWNER_FULL_NAME ?? 'Platform Owner',
     phone: process.env.OWNER_PHONE ?? '111',
-    password: process.env.OWNER_PASSWORD ?? '111',
+    password: this.protectPassword(process.env.OWNER_PASSWORD ?? '111'),
     role: 'platform_owner',
   } as const;
 
@@ -79,7 +88,13 @@ export class AppService {
   }
 
   async getAdminStores(): Promise<Store[]> {
-    return this.loadStores();
+    const stores = await this.loadStores();
+    return stores.map((store) => ({
+      ...store,
+      password: '',
+      lastIssuedPassword:
+        store.lastIssuedPassword ?? this.visiblePassword(store.password),
+    }));
   }
 
   async getOwnerDashboard(): Promise<OwnerDashboard> {
@@ -102,7 +117,21 @@ export class AppService {
   }
 
   async getOwnerTenants(): Promise<Tenant[]> {
-    return this.loadTenants();
+    const [tenants, businessAdmins] = await Promise.all([
+      this.loadTenants(),
+      this.loadBusinessAdmins(),
+    ]);
+
+    return tenants.map((tenant) => {
+      const admin = businessAdmins.find((item) => item.tenantId === tenant.id);
+      return {
+        ...tenant,
+        adminFullName: admin?.fullName ?? '',
+        adminPhone: admin?.phone ?? '',
+        adminPassword:
+          admin?.lastIssuedPassword ?? this.visiblePassword(admin?.password ?? ''),
+      };
+    });
   }
 
   async getOrders(): Promise<Order[]> {
@@ -320,7 +349,7 @@ export class AppService {
 
     if (
       phone === this.platformOwner.phone &&
-      password === this.platformOwner.password
+      this.isPasswordMatch(password, this.platformOwner.password)
     ) {
       return {
         success: true,
@@ -341,7 +370,7 @@ export class AppService {
     }
 
     const businessAdmin = businessAdmins.find(
-      (item) => item.phone === phone && item.password === password,
+      (item) => item.phone === phone && this.isPasswordMatch(password, item.password),
     );
     if (businessAdmin) {
       const tenant = tenants.find((item) => item.id === businessAdmin.tenantId);
@@ -379,7 +408,7 @@ export class AppService {
     }
 
     const store = stores.find(
-      (item) => item.phone === phone && item.password === password,
+      (item) => item.phone === phone && this.isPasswordMatch(password, item.password),
     );
     if (store) {
       const tenant = tenants.find((item) => item.id === store.tenantId);
@@ -475,11 +504,12 @@ export class AppService {
       throw new BadRequestException('Yangi parol kamida 4 ta belgidan iborat bo\'lsin');
     }
 
-    if (this.databaseService.isEnabled()) {
-      const resolved = await this.databaseService.resolvePasswordResetRequest(
-        requestId,
-        newPassword,
-      );
+      if (this.databaseService.isEnabled()) {
+        const resolved = await this.databaseService.resolvePasswordResetRequest(
+          requestId,
+          this.protectPassword(newPassword),
+          newPassword,
+        );
 
       if (!resolved) {
         throw new BadRequestException('Parol tiklash so\'rovi topilmadi');
@@ -502,7 +532,8 @@ export class AppService {
       throw new BadRequestException('Magazin topilmadi');
     }
 
-    store.password = newPassword;
+    store.password = this.protectPassword(newPassword);
+    store.lastIssuedPassword = newPassword;
     request.status = 'resolved';
     request.resolvedAt = new Date().toISOString();
 
@@ -623,7 +654,7 @@ export class AppService {
     const password =
       requestedPassword.length >= 4
         ? requestedPassword
-        : existing?.password ?? this.generateAdminPassword(phone);
+        : existing?.lastIssuedPassword ?? this.generateAdminPassword(phone);
 
     if (!fullName || !phone || !address) {
       throw new BadRequestException(
@@ -640,49 +671,52 @@ export class AppService {
       tenantId: payload.tenantId ? Number(payload.tenantId) : 1,
       fullName,
       phone,
-      password,
+      password: this.protectPassword(password),
+      lastIssuedPassword: password,
       address,
     };
 
     if (this.databaseService.isEnabled()) {
       const store = await this.databaseService.saveStore(normalized);
+        return {
+          success: true,
+          message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
+          store,
+        };
+      }
+
+      if (existing) {
+        existing.fullName = fullName;
+        existing.phone = phone;
+        existing.password = this.protectPassword(password);
+        existing.lastIssuedPassword = password;
+        existing.address = address;
+
+        return {
+          success: true,
+          message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.lastIssuedPassword}`,
+          store: existing,
+        };
+      }
+
+    const store: Store = {
+        id: this.stores.length + 1,
+        tenantId: normalized.tenantId ?? 1,
+        fullName,
+        phone,
+        password: this.protectPassword(password),
+        lastIssuedPassword: password,
+        role: 'client',
+        address,
+      };
+    this.stores.push(store);
+
       return {
         success: true,
-        message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.password}`,
+        message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
         store,
       };
     }
-
-    if (existing) {
-      existing.fullName = fullName;
-      existing.phone = phone;
-      existing.password = password;
-      existing.address = address;
-
-      return {
-        success: true,
-        message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.password}`,
-        store: existing,
-      };
-    }
-
-    const store: Store = {
-      id: this.stores.length + 1,
-      tenantId: normalized.tenantId ?? 1,
-      fullName,
-      phone,
-      password,
-      role: 'client',
-      address,
-    };
-    this.stores.push(store);
-
-    return {
-      success: true,
-      message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.password}`,
-      store,
-    };
-  }
 
   async saveTenant(payload: SaveTenantPayload) {
     const name = this.cleanText(payload.name);
@@ -711,7 +745,7 @@ export class AppService {
     const adminPassword =
       requestedAdminPassword.length >= 4
         ? requestedAdminPassword
-        : existingAdmin?.password ?? this.generateAdminPassword(adminPhone);
+        : existingAdmin?.lastIssuedPassword ?? this.generateAdminPassword(adminPhone);
 
     if (!name || !phone || !adminPhone) {
       throw new BadRequestException(
@@ -747,6 +781,7 @@ export class AppService {
         tenant.id,
         adminFullName,
         adminPhone,
+        this.protectPassword(adminPassword),
         adminPassword,
       );
       return {
@@ -769,21 +804,23 @@ export class AppService {
       existing.subscriptionEndsAt = subscriptionEndsAt;
       existing.locale = locale;
 
-      const admin = this.businessAdmins.find((item) => item.tenantId === existing.id);
-      if (admin) {
-        admin.fullName = adminFullName;
-        admin.phone = adminPhone;
-        admin.password = adminPassword;
-      } else {
-        this.businessAdmins.push({
-          id: this.businessAdmins.length + 1,
-          tenantId: existing.id,
-          fullName: adminFullName,
-          phone: adminPhone,
-          password: adminPassword,
-          role: 'business_admin',
-        });
-      }
+        const admin = this.businessAdmins.find((item) => item.tenantId === existing.id);
+        if (admin) {
+          admin.fullName = adminFullName;
+          admin.phone = adminPhone;
+          admin.password = this.protectPassword(adminPassword);
+          admin.lastIssuedPassword = adminPassword;
+        } else {
+          this.businessAdmins.push({
+            id: this.businessAdmins.length + 1,
+            tenantId: existing.id,
+            fullName: adminFullName,
+            phone: adminPhone,
+            password: this.protectPassword(adminPassword),
+            lastIssuedPassword: adminPassword,
+            role: 'business_admin',
+          });
+        }
 
       return {
         success: true,
@@ -803,14 +840,15 @@ export class AppService {
       locale,
     };
     this.tenants.push(tenant);
-    this.businessAdmins.push({
-      id: this.businessAdmins.length + 1,
-      tenantId: tenant.id,
-      fullName: adminFullName,
-      phone: adminPhone,
-      password: adminPassword,
-      role: 'business_admin',
-    });
+      this.businessAdmins.push({
+        id: this.businessAdmins.length + 1,
+        tenantId: tenant.id,
+        fullName: adminFullName,
+        phone: adminPhone,
+        password: this.protectPassword(adminPassword),
+        lastIssuedPassword: adminPassword,
+        role: 'business_admin',
+      });
 
     return {
       success: true,
@@ -1066,6 +1104,46 @@ export class AppService {
     if (this.cleanText(adminKey) !== expectedKey) {
       throw new UnauthorizedException('Admin ruxsati topilmadi');
     }
+  }
+
+  private protectPassword(password: string): string {
+    const clean = this.cleanText(password);
+    if (!clean) {
+      return '';
+    }
+
+    if (clean.startsWith('scrypt$')) {
+      return clean;
+    }
+
+    const salt = randomBytes(8).toString('hex');
+    const hash = scryptSync(clean, salt, 32).toString('hex');
+    return `scrypt$${salt}$${hash}`;
+  }
+
+  private isPasswordMatch(plainPassword: string, storedPassword: string): boolean {
+    const plain = this.cleanText(plainPassword);
+    const stored = this.cleanText(storedPassword);
+
+    if (!stored.startsWith('scrypt$')) {
+      return plain === stored;
+    }
+
+    const parts = stored.split('$');
+    if (parts.length !== 3) {
+      return false;
+    }
+
+    const [, salt, expectedHash] = parts;
+    const actualHash = scryptSync(plain, salt, 32).toString('hex');
+    return timingSafeEqual(
+      Buffer.from(actualHash, 'hex'),
+      Buffer.from(expectedHash, 'hex'),
+    );
+  }
+
+  private visiblePassword(storedPassword: string): string {
+    return storedPassword.startsWith('scrypt$') ? '' : storedPassword;
   }
 
   private generateAdminPassword(phone: string): string {
