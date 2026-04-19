@@ -608,26 +608,41 @@ export class AppService {
 
   async saveTenant(payload: SaveTenantPayload) {
     const name = this.cleanText(payload.name);
-    const ownerName = this.cleanText(payload.ownerName);
+    const ownerName = this.cleanText(payload.ownerName) || name;
     const phone = this.cleanText(payload.phone);
-    const adminFullName = this.cleanText(payload.adminFullName);
+    const adminFullName =
+      this.cleanText(payload.adminFullName) || `${name} admin`;
     const adminPhone = this.cleanText(payload.adminPhone);
-    const adminPassword = this.cleanText(payload.adminPassword);
-    const maxStores = Number(payload.maxStores);
+    const requestedAdminPassword = this.cleanText(payload.adminPassword);
+    const maxStores = Number(payload.maxStores ?? 500);
     const locale = payload.locale ?? 'uz';
     const isActive = payload.isActive ?? true;
     const subscriptionEndsAt =
       payload.subscriptionEndsAt ??
       new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString();
+    const [tenants, businessAdmins] = await Promise.all([
+      this.loadTenants(),
+      this.loadBusinessAdmins(),
+    ]);
+    const existingTenant = payload.id
+      ? tenants.find((item) => item.id === Number(payload.id))
+      : null;
+    const existingAdmin = existingTenant
+      ? businessAdmins.find((item) => item.tenantId === existingTenant.id)
+      : null;
+    const adminPassword =
+      requestedAdminPassword.length >= 4
+        ? requestedAdminPassword
+        : existingAdmin?.password ?? this.generateAdminPassword(adminPhone);
 
-    if (!name || !ownerName || !phone) {
-      throw new BadRequestException('Tenant nomi, egasi va telefoni shart');
+    if (!name || !phone || !adminPhone) {
+      throw new BadRequestException(
+        'Biznes nomi, biznes telefoni va admin telefoni shart',
+      );
     }
 
-    if (!adminFullName || !adminPhone || adminPassword.length < 4) {
-      throw new BadRequestException(
-        'Admin FIO, telefon va kamida 4 belgili parol shart',
-      );
+    if (adminPassword.length < 4) {
+      throw new BadRequestException('Admin paroli kamida 4 belgili bo\'lishi kerak');
     }
 
     if (!Number.isInteger(maxStores) || maxStores <= 0) {
@@ -658,7 +673,7 @@ export class AppService {
       );
       return {
         success: true,
-        message: 'Biznes admin panel saqlandi',
+        message: this.buildTenantSavedMessage(adminPhone, adminPassword),
         tenant,
       };
     }
@@ -694,7 +709,7 @@ export class AppService {
 
       return {
         success: true,
-        message: 'Biznes admin panel saqlandi',
+        message: this.buildTenantSavedMessage(adminPhone, adminPassword),
         tenant: existing,
       };
     }
@@ -721,7 +736,7 @@ export class AppService {
 
     return {
       success: true,
-      message: 'Biznes admin panel saqlandi',
+      message: this.buildTenantSavedMessage(adminPhone, adminPassword),
       tenant,
     };
   }
@@ -973,5 +988,18 @@ export class AppService {
     if (this.cleanText(adminKey) !== expectedKey) {
       throw new UnauthorizedException('Admin ruxsati topilmadi');
     }
+  }
+
+  private generateAdminPassword(phone: string): string {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length >= 4) {
+      return digits.slice(-4);
+    }
+
+    return '1234';
+  }
+
+  private buildTenantSavedMessage(adminPhone: string, adminPassword: string): string {
+    return `Biznes panel saqlandi. Admin login: ${adminPhone}. Admin parol: ${adminPassword}`;
   }
 }
