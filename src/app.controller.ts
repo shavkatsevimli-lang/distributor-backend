@@ -1,91 +1,135 @@
-import { Body, Controller, Get, Post, UnauthorizedException } from '@nestjs/common';
-
-let orders: any[] = [];
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { AppService } from './app.service';
+import type {
+  CreateOrderPayload,
+  GrantSubscriptionPayload,
+  LoginPayload,
+  PasswordResetRequestPayload,
+  ResolvePasswordResetPayload,
+  SaveProductPayload,
+  SaveTenantPayload,
+  SetTenantAccessPayload,
+  UpdateStatusPayload,
+} from './app.types';
 
 @Controller()
 export class AppController {
+  constructor(private readonly appService: AppService) {}
+
   @Get()
   getHello(): string {
-    return 'Hello';
+    return this.appService.getHello();
+  }
+
+  @Get('version')
+  getVersion() {
+    return this.appService.getVersion();
   }
 
   @Get('products')
   getProducts() {
-    return [
-      { id: 1, name: 'Shakar 1kg', price: 14000, stock: 120 },
-      { id: 2, name: 'Yog 1L', price: 18000, stock: 80 },
-      { id: 3, name: 'Un 50kg', price: 320000, stock: 30 },
-      { id: 4, name: 'Makaron', price: 12000, stock: 200 }
-    ];
+    return this.appService.getProducts();
+  }
+
+  @Get('admin/products')
+  getAdminProducts() {
+    return this.appService.getAdminProducts();
+  }
+
+  @Get('owner/dashboard')
+  getOwnerDashboard() {
+    return this.appService.getOwnerDashboard();
+  }
+
+  @Get('owner/tenants')
+  getOwnerTenants() {
+    return this.appService.getOwnerTenants();
   }
 
   @Get('orders')
   getOrders() {
-    return orders;
+    return this.appService.getOrders();
+  }
+
+  @Get('admin/dashboard')
+  getAdminDashboard() {
+    return this.appService.getAdminDashboard();
+  }
+
+  @Get('clients/:id/dashboard')
+  getClientDashboard(@Param('id', ParseIntPipe) id: number) {
+    return this.appService.getClientDashboard(id);
+  }
+
+  @Get('admin/password-reset-requests')
+  getPasswordResetRequests() {
+    return this.appService.getPasswordResetRequests();
   }
 
   @Post('orders')
-  createOrder(@Body() body: any) {
-    const newOrder = {
-      id: orders.length + 1,
-      ...body,
-      status: 'new',
-      createdAt: new Date().toISOString(),
-    };
+  createOrder(@Body() body: CreateOrderPayload) {
+    return this.appService.createOrder(body);
+  }
 
-    orders.push(newOrder);
+  @Post('admin/products')
+  saveProduct(@Body() body: SaveProductPayload) {
+    return this.appService.saveProduct(body);
+  }
 
-    return {
-      success: true,
-      message: 'Zakaz qabul qilindi',
-      order: newOrder,
-    };
+  @Post('owner/tenants')
+  saveTenant(@Body() body: SaveTenantPayload) {
+    return this.appService.saveTenant(body);
+  }
+
+  @Post('password-reset-requests')
+  requestPasswordReset(@Body() body: PasswordResetRequestPayload) {
+    return this.appService.requestPasswordReset(body);
+  }
+
+  @Patch('orders/:id/status')
+  updateOrderStatus(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: UpdateStatusPayload,
+    @Headers('x-admin-key') adminKey?: string,
+  ) {
+    return this.appService.updateOrderStatus(id, body, adminKey);
   }
 
   @Post('login')
-  login(@Body() body: { phone: string; password: string }) {
-    const demoClient = {
-      id: 1,
-      fullName: 'Ali Market',
-      phone: '998901234567',
-      password: '12345',
-      role: 'client',
-    };
+  login(@Body() body: LoginPayload) {
+    return this.appService.login(body);
+  }
 
-    const demoAdmin = {
-      id: 2,
-      fullName: 'Admin',
-      phone: '999',
-      password: '999',
-      role: 'admin',
-    };
+  @Patch('admin/password-reset-requests/:id/resolve')
+  resolvePasswordResetRequest(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: ResolvePasswordResetPayload,
+  ) {
+    return this.appService.resolvePasswordResetRequest(id, body);
+  }
 
-    if (body.phone === demoClient.phone && body.password === demoClient.password) {
-      return {
-        success: true,
-        message: 'Login successful',
-        user: {
-          id: demoClient.id,
-          fullName: demoClient.fullName,
-          phone: demoClient.phone,
-          role: demoClient.role,
-        },
-      };
-    }
+  @Patch('owner/tenants/:id/subscription')
+  grantSubscription(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: GrantSubscriptionPayload,
+  ) {
+    return this.appService.grantSubscription(id, body);
+  }
 
-    if (body.phone === demoAdmin.phone && body.password === demoAdmin.password) {
-      return {
-        success: true,
-        message: 'Login successful',
-        user: {
-          id: demoAdmin.id,
-          fullName: demoAdmin.fullName,
-          phone: demoAdmin.phone,
-          role: demoAdmin.role,
-        },
-      };
-    }
-
-    throw new UnauthorizedException('Telefon yoki parol xato');
+  @Patch('owner/tenants/:id/access')
+  setTenantAccess(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: SetTenantAccessPayload,
+  ) {
+    return this.appService.setTenantAccess(id, body);
   }
 }

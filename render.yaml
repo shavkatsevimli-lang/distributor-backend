@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: distributorpro-backend
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: PORT
+        value: 10000
+      - key: OWNER_PHONE
+        value: 111
+      - key: OWNER_PASSWORD
+        value: 111
+      - key: OWNER_FULL_NAME
+        value: Platform Owner
+      - key: ADMIN_PHONE
+        value: 999
+      - key: ADMIN_PASSWORD
+        value: 999
+      - key: CLIENT_PHONE
+        value: 998901234567
+      - key: CLIENT_PASSWORD
+        value: 12345
