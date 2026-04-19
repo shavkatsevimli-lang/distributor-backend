@@ -163,6 +163,15 @@ export interface SaveTenantPayload {
   adminPassword?: string;
 }
 
+export interface SaveStorePayload {
+  id?: number;
+  tenantId?: number;
+  fullName?: string;
+  phone?: string;
+  password?: string;
+  address?: string;
+}
+
 export interface GrantSubscriptionPayload {
   months?: number;
 }

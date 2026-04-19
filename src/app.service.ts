@@ -20,6 +20,7 @@ import {
   Product,
   ResolvePasswordResetPayload,
   SaveProductPayload,
+  SaveStorePayload,
   SaveTenantPayload,
   SetTenantAccessPayload,
   Store,
@@ -75,6 +76,10 @@ export class AppService {
 
   async getAdminProducts(): Promise<Product[]> {
     return this.loadProducts();
+  }
+
+  async getAdminStores(): Promise<Store[]> {
+    return this.loadStores();
   }
 
   async getOwnerDashboard(): Promise<OwnerDashboard> {
@@ -603,6 +608,79 @@ export class AppService {
       success: true,
       message: 'Mahsulot saqlandi',
       product,
+    };
+  }
+
+  async saveStore(payload: SaveStorePayload) {
+    const fullName = this.cleanText(payload.fullName);
+    const phone = this.cleanText(payload.phone);
+    const address = this.cleanText(payload.address);
+    const requestedPassword = this.cleanText(payload.password);
+    const stores = await this.loadStores();
+    const existing = payload.id
+      ? stores.find((item) => item.id === Number(payload.id))
+      : null;
+    const password =
+      requestedPassword.length >= 4
+        ? requestedPassword
+        : existing?.password ?? this.generateAdminPassword(phone);
+
+    if (!fullName || !phone || !address) {
+      throw new BadRequestException(
+        'Magazin nomi, telefoni va lokatsiyasi shart',
+      );
+    }
+
+    if (password.length < 4) {
+      throw new BadRequestException('Magazin paroli kamida 4 belgili bo\'lishi kerak');
+    }
+
+    const normalized: SaveStorePayload = {
+      id: payload.id ? Number(payload.id) : undefined,
+      tenantId: payload.tenantId ? Number(payload.tenantId) : 1,
+      fullName,
+      phone,
+      password,
+      address,
+    };
+
+    if (this.databaseService.isEnabled()) {
+      const store = await this.databaseService.saveStore(normalized);
+      return {
+        success: true,
+        message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.password}`,
+        store,
+      };
+    }
+
+    if (existing) {
+      existing.fullName = fullName;
+      existing.phone = phone;
+      existing.password = password;
+      existing.address = address;
+
+      return {
+        success: true,
+        message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.password}`,
+        store: existing,
+      };
+    }
+
+    const store: Store = {
+      id: this.stores.length + 1,
+      tenantId: normalized.tenantId ?? 1,
+      fullName,
+      phone,
+      password,
+      role: 'client',
+      address,
+    };
+    this.stores.push(store);
+
+    return {
+      success: true,
+      message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.password}`,
+      store,
     };
   }
 

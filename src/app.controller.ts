@@ -16,6 +16,7 @@ import type {
   PasswordResetRequestPayload,
   ResolvePasswordResetPayload,
   SaveProductPayload,
+  SaveStorePayload,
   SaveTenantPayload,
   SetTenantAccessPayload,
   UpdateStatusPayload,
@@ -43,6 +44,11 @@ export class AppController {
   @Get('admin/products')
   getAdminProducts() {
     return this.appService.getAdminProducts();
+  }
+
+  @Get('admin/stores')
+  getAdminStores() {
+    return this.appService.getAdminStores();
   }
 
   @Get('owner/dashboard')
@@ -88,6 +94,11 @@ export class AppController {
   @Post('owner/tenants')
   saveTenant(@Body() body: SaveTenantPayload) {
     return this.appService.saveTenant(body);
+  }
+
+  @Post('admin/stores')
+  saveStore(@Body() body: SaveStorePayload) {
+    return this.appService.saveStore(body);
   }
 
   @Post('password-reset-requests')

@@ -11,8 +11,9 @@ import type {
   OrderStatus,
   PasswordResetRequest,
   Product,
-  SaveTenantPayload,
   SaveProductPayload,
+  SaveStorePayload,
+  SaveTenantPayload,
   Store,
   Tenant,
 } from './app.types';
@@ -160,6 +161,59 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
        ORDER BY id ASC`,
     );
     return result.rows as Store[];
+  }
+
+  async saveStore(payload: SaveStorePayload): Promise<Store> {
+    if (payload.id && payload.id > 0) {
+      const result = await this.query(
+        `UPDATE stores
+         SET
+           full_name = $2,
+           phone = $3,
+           password = $4,
+           address = $5
+         WHERE id = $1
+         RETURNING
+           id,
+           tenant_id AS "tenantId",
+           full_name AS "fullName",
+           phone,
+           password,
+           role,
+           address`,
+        [
+          payload.id,
+          payload.fullName,
+          payload.phone,
+          payload.password,
+          payload.address,
+        ],
+      );
+      return result.rows[0] as Store;
+    }
+
+    const result = await this.query(
+      `INSERT INTO stores
+        (tenant_id, full_name, phone, password, role, address)
+       VALUES ($1, $2, $3, $4, 'client', $5)
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         full_name AS "fullName",
+         phone,
+         password,
+         role,
+         address`,
+      [
+        payload.tenantId,
+        payload.fullName,
+        payload.phone,
+        payload.password,
+        payload.address,
+      ],
+    );
+
+    return result.rows[0] as Store;
   }
 
   async getTenants(): Promise<Tenant[]> {
