@@ -128,6 +128,8 @@ export interface SetupBusinessAdminPasswordPayload {
 }
 
 export interface CreateOrderPayload {
+  tenantId?: number;
+  storeId?: number;
   productId?: number;
   productName?: string;
   qty?: number;

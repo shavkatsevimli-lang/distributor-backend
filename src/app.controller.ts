@@ -42,6 +42,11 @@ export class AppController {
     return this.appService.getProducts();
   }
 
+  @Get('tenants/:tenantId/products')
+  getTenantProducts(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantProducts(tenantId);
+  }
+
   @Get('admin/products')
   getAdminProducts() {
     return this.appService.getAdminProducts();
@@ -75,6 +80,14 @@ export class AppController {
   @Get('clients/:id/dashboard')
   getClientDashboard(@Param('id', ParseIntPipe) id: number) {
     return this.appService.getClientDashboard(id);
+  }
+
+  @Get('tenants/:tenantId/stores/:storeId/dashboard')
+  getTenantClientDashboard(
+    @Param('tenantId', ParseIntPipe) tenantId: number,
+    @Param('storeId', ParseIntPipe) storeId: number,
+  ) {
+    return this.appService.getTenantClientDashboard(tenantId, storeId);
   }
 
   @Get('admin/password-reset-requests')

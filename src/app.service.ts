@@ -84,6 +84,17 @@ export class AppService {
     return products.filter((product) => product.isVisible);
   }
 
+  async getTenantProducts(tenantId: number): Promise<Product[]> {
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      throw new BadRequestException('Tenant ID xato');
+    }
+
+    const products = await this.loadProducts();
+    return products.filter(
+      (product) => product.tenantId === tenantId && product.isVisible,
+    );
+  }
+
   async getAdminProducts(): Promise<Product[]> {
     return this.loadProducts();
   }
@@ -192,12 +203,48 @@ export class AppService {
     };
   }
 
+  async getTenantClientDashboard(
+    tenantId: number,
+    storeId: number,
+  ): Promise<ClientDashboard> {
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      throw new BadRequestException('Tenant ID xato');
+    }
+
+    const [stores, orders] = await Promise.all([
+      this.loadStores(),
+      this.loadOrders(),
+    ]);
+    const store = stores.find(
+      (item) => item.id === storeId && item.tenantId === tenantId,
+    );
+
+    if (!store) {
+      throw new BadRequestException('Magazin topilmadi');
+    }
+
+    const tenantStores = stores.filter((item) => item.tenantId === tenantId);
+    const tenantOrders = orders.filter((item) => item.tenantId === tenantId);
+
+    return {
+      store: {
+        id: store.id,
+        fullName: store.fullName,
+        address: store.address,
+      },
+      stats: this.buildStoreStats(store, tenantStores, tenantOrders),
+      leaderboard: this.buildLeaderboard(tenantStores, tenantOrders).slice(0, 10),
+    };
+  }
+
   async createOrder(payload: CreateOrderPayload) {
     const [products, stores] = await Promise.all([
       this.loadProducts(),
       this.loadStores(),
     ]);
 
+    const tenantId = Number(payload.tenantId);
+    const storeId = Number(payload.storeId);
     const productId = Number(payload.productId);
     const qty = Number(payload.qty);
     const price = Number(payload.price);
@@ -220,14 +267,27 @@ export class AppService {
       throw new BadRequestException('Mijoz nomi kiritilishi shart');
     }
 
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      throw new BadRequestException('Tenant ID xato');
+    }
+
+    if (!Number.isInteger(storeId) || storeId <= 0) {
+      throw new BadRequestException('Magazin ID xato');
+    }
+
     const store = stores.find(
-      (item) => item.fullName.toLowerCase() === customerName.toLowerCase(),
+      (item) =>
+        item.id === storeId &&
+        item.tenantId === tenantId &&
+        item.fullName.toLowerCase() === customerName.toLowerCase(),
     );
     if (!store) {
       throw new BadRequestException('Bu magazin tizimda topilmadi');
     }
 
-    const product = products.find((item) => item.id === productId);
+    const product = products.find(
+      (item) => item.id === productId && item.tenantId === tenantId,
+    );
     if (!product) {
       throw new BadRequestException('Bunday mahsulot topilmadi');
     }
@@ -415,6 +475,7 @@ export class AppService {
           bonusBalance: 0,
           tier: 'admin',
           tenantId: tenant.id,
+          tenantName: tenant.name,
           subscriptionEndsAt: tenant.subscriptionEndsAt,
           isBlocked: false,
         },
@@ -447,6 +508,7 @@ export class AppService {
           bonusBalance: stats.bonusBalance,
           tier: stats.tier,
           tenantId: store.tenantId,
+          tenantName: tenant.name,
           subscriptionEndsAt: tenant.subscriptionEndsAt,
           isBlocked: false,
         },
