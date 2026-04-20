@@ -8,7 +8,9 @@ import { DatabaseService } from './database.service';
 import {
   AdminDashboard,
   BusinessAdmin,
+  CartOrderItemPayload,
   ClientTopProduct,
+  CreateCartOrderPayload,
   CreateOrderPayload,
   ClientDashboard,
   GrantSubscriptionPayload,
@@ -337,80 +339,13 @@ export class AppService {
       this.loadProducts(),
       this.loadStores(),
     ]);
-
-    const tenantId = Number(payload.tenantId);
-    const storeId = Number(payload.storeId);
-    const productId = Number(payload.productId);
-    const qty = Number(payload.qty);
-    const price = Number(payload.price);
-    const customerName = this.cleanText(payload.customerName);
-    const productName = this.cleanText(payload.productName);
-
-    if (!Number.isInteger(productId) || productId <= 0) {
-      throw new BadRequestException('Mahsulot ID xato');
-    }
-
-    if (!Number.isInteger(qty) || qty <= 0) {
-      throw new BadRequestException('Zakaz soni xato');
-    }
-
-    if (!Number.isInteger(price) || price <= 0) {
-      throw new BadRequestException('Narx xato');
-    }
-
-    if (!customerName) {
-      throw new BadRequestException('Mijoz nomi kiritilishi shart');
-    }
-
-    if (!Number.isInteger(tenantId) || tenantId <= 0) {
-      throw new BadRequestException('Tenant ID xato');
-    }
-
-    if (!Number.isInteger(storeId) || storeId <= 0) {
-      throw new BadRequestException('Magazin ID xato');
-    }
-
-    const store = stores.find(
-      (item) =>
-        item.id === storeId &&
-        item.tenantId === tenantId &&
-        item.fullName.toLowerCase() === customerName.toLowerCase(),
+    const newOrder = this.prepareOrderDraft(
+      payload,
+      products,
+      stores,
+      new Map<number, number>(),
+      1,
     );
-    if (!store) {
-      throw new BadRequestException('Bu magazin tizimda topilmadi');
-    }
-
-    if (store.isActive === false) {
-      throw new BadRequestException('Bu magazin uchun kirish yopilgan');
-    }
-
-    const product = products.find(
-      (item) => item.id === productId && item.tenantId === tenantId,
-    );
-    if (!product) {
-      throw new BadRequestException('Bunday mahsulot topilmadi');
-    }
-
-    if (!product.isVisible || product.stock <= 0) {
-      throw new BadRequestException('Mahsulot hozircha buyurtmaga yopiq');
-    }
-
-    if (qty > product.stock) {
-      throw new BadRequestException('Sklad miqdoridan oshib ketdi');
-    }
-
-    const newOrder: Order = {
-      id: this.orders.length + 1,
-      tenantId: store.tenantId,
-      storeId: store.id,
-      productId,
-      productName: productName || product.name,
-      qty,
-      price,
-      customerName,
-      status: 'new',
-      createdAt: new Date().toISOString(),
-    };
 
     if (this.databaseService.isEnabled()) {
       const created = await this.databaseService.createOrder(newOrder);
@@ -422,12 +357,69 @@ export class AppService {
     }
 
     this.orders.push(newOrder);
-    product.stock -= qty;
+    const product = this.products.find((item) => item.id === newOrder.productId);
+    if (product) {
+      product.stock -= newOrder.qty;
+    }
 
     return {
       success: true,
       message: 'Zakaz qabul qilindi',
       order: newOrder,
+    };
+  }
+
+  async createCartOrder(payload: CreateCartOrderPayload) {
+    const [products, stores] = await Promise.all([
+      this.loadProducts(),
+      this.loadStores(),
+    ]);
+    const items = payload.items ?? [];
+
+    if (items.length === 0) {
+      throw new BadRequestException('Savatcha bo\'sh');
+    }
+
+    const reservedStock = new Map<number, number>();
+    const draftOrders = items.map((item, index) =>
+      this.prepareOrderDraft(
+        {
+          tenantId: payload.tenantId,
+          storeId: payload.storeId,
+          productId: item.productId,
+          productName: item.productName,
+          qty: item.qty,
+          price: item.price,
+          customerName: payload.customerName,
+        },
+        products,
+        stores,
+        reservedStock,
+        index + 1,
+      ),
+    );
+
+    if (this.databaseService.isEnabled()) {
+      const createdOrders = await this.databaseService.createOrders(draftOrders);
+      return {
+        success: true,
+        message: `Savatcha yuborildi: ${createdOrders.length} ta mahsulot`,
+        orders: createdOrders,
+      };
+    }
+
+    for (const order of draftOrders) {
+      this.orders.push(order);
+      const product = this.products.find((item) => item.id === order.productId);
+      if (product) {
+        product.stock -= order.qty;
+      }
+    }
+
+    return {
+      success: true,
+      message: `Savatcha yuborildi: ${draftOrders.length} ta mahsulot`,
+      orders: draftOrders,
     };
   }
 
@@ -1283,6 +1275,96 @@ export class AppService {
       success: true,
       message: `${months} oyga obuna ochildi`,
       tenant,
+    };
+  }
+
+  private prepareOrderDraft(
+    payload:
+      | CreateOrderPayload
+      | (CartOrderItemPayload & {
+          tenantId?: number;
+          storeId?: number;
+          customerName?: string;
+        }),
+    products: Product[],
+    stores: Store[],
+    reservedStock: Map<number, number>,
+    orderSequence: number,
+  ): Order {
+    const tenantId = Number(payload.tenantId);
+    const storeId = Number(payload.storeId);
+    const productId = Number(payload.productId);
+    const qty = Number(payload.qty);
+    const price = Number(payload.price);
+    const customerName = this.cleanText(payload.customerName);
+    const productName = this.cleanText(payload.productName);
+
+    if (!Number.isInteger(productId) || productId <= 0) {
+      throw new BadRequestException('Mahsulot ID xato');
+    }
+
+    if (!Number.isInteger(qty) || qty <= 0) {
+      throw new BadRequestException('Zakaz soni xato');
+    }
+
+    if (!Number.isInteger(price) || price <= 0) {
+      throw new BadRequestException('Narx xato');
+    }
+
+    if (!customerName) {
+      throw new BadRequestException('Mijoz nomi kiritilishi shart');
+    }
+
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      throw new BadRequestException('Tenant ID xato');
+    }
+
+    if (!Number.isInteger(storeId) || storeId <= 0) {
+      throw new BadRequestException('Magazin ID xato');
+    }
+
+    const store = stores.find(
+      (item) =>
+        item.id === storeId &&
+        item.tenantId === tenantId &&
+        item.fullName.toLowerCase() === customerName.toLowerCase(),
+    );
+    if (!store) {
+      throw new BadRequestException('Bu magazin tizimda topilmadi');
+    }
+
+    if (store.isActive === false) {
+      throw new BadRequestException('Bu magazin uchun kirish yopilgan');
+    }
+
+    const product = products.find(
+      (item) => item.id === productId && item.tenantId === tenantId,
+    );
+    if (!product) {
+      throw new BadRequestException('Bunday mahsulot topilmadi');
+    }
+
+    if (!product.isVisible || product.stock <= 0) {
+      throw new BadRequestException(`"${product.name}" hozircha buyurtmaga yopiq`);
+    }
+
+    const alreadyReserved = reservedStock.get(productId) ?? 0;
+    if (qty + alreadyReserved > product.stock) {
+      throw new BadRequestException(`"${product.name}" sklad miqdoridan oshib ketdi`);
+    }
+    reservedStock.set(productId, alreadyReserved + qty);
+
+    return {
+      id: this.orders.length + orderSequence,
+      tenantId: store.tenantId,
+      storeId: store.id,
+      productId,
+      productName: productName || product.name,
+      qty,
+      price,
+      customerName,
+      status: 'new',
+      createdAt: new Date().toISOString(),
     };
   }
 

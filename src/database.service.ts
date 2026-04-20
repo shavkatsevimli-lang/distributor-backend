@@ -462,6 +462,65 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return result.rows[0] as Order;
   }
 
+  async createOrders(orders: Order[]): Promise<Order[]> {
+    if (!this.pool) {
+      throw new Error('Database pool mavjud emas');
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const createdOrders: Order[] = [];
+
+      for (const order of orders) {
+        const result = await client.query(
+          `INSERT INTO orders
+            (tenant_id, store_id, product_id, product_name, qty, price, customer_name, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           RETURNING
+             id,
+             tenant_id AS "tenantId",
+             store_id AS "storeId",
+             product_id AS "productId",
+             product_name AS "productName",
+             qty,
+             price,
+             customer_name AS "customerName",
+             status,
+             created_at AS "createdAt"`,
+          [
+            order.tenantId ?? null,
+            order.storeId ?? null,
+            order.productId,
+            order.productName,
+            order.qty,
+            order.price,
+            order.customerName,
+            order.status,
+            order.createdAt,
+          ],
+        );
+
+        await client.query(
+          `UPDATE products
+           SET stock = stock - $1
+           WHERE id = $2`,
+          [order.qty, order.productId],
+        );
+
+        createdOrders.push(result.rows[0] as Order);
+      }
+
+      await client.query('COMMIT');
+      return createdOrders;
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async getPasswordResetRequests(): Promise<PasswordResetRequest[]> {
     const result = await this.query(
       `SELECT

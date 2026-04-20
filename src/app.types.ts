@@ -148,6 +148,20 @@ export interface CreateOrderPayload {
   customerName?: string;
 }
 
+export interface CartOrderItemPayload {
+  productId?: number;
+  productName?: string;
+  qty?: number;
+  price?: number;
+}
+
+export interface CreateCartOrderPayload {
+  tenantId?: number;
+  storeId?: number;
+  customerName?: string;
+  items?: CartOrderItemPayload[];
+}
+
 export interface UpdateStatusPayload {
   status?: string;
 }

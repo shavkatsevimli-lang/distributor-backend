@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { AppService } from './app.service';
 import type {
+  CreateCartOrderPayload,
   CreateOrderPayload,
   GrantSubscriptionPayload,
   LoginPayload,
@@ -125,6 +126,11 @@ export class AppController {
   @Post('orders')
   createOrder(@Body() body: CreateOrderPayload) {
     return this.appService.createOrder(body);
+  }
+
+  @Post('orders/cart')
+  createCartOrder(@Body() body: CreateCartOrderPayload) {
+    return this.appService.createCartOrder(body);
   }
 
   @Post('admin/products')
