@@ -57,9 +57,9 @@ export class AppService {
   private readonly orders: Order[] = [...seedOrders];
   private readonly passwordResetRequests: PasswordResetRequest[] = [];
 
-  private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE);
+  private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE || '111');
   private readonly ownerPasswordHash = this.protectPassword(
-    this.cleanText(process.env.OWNER_PASSWORD),
+    this.cleanText(process.env.OWNER_PASSWORD || '111'),
   );
   private readonly platformOwner = {
     id: 999,
