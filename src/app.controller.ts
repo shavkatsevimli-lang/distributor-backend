@@ -18,6 +18,7 @@ import type {
   SaveProductPayload,
   SaveStorePayload,
   SaveTenantPayload,
+  SetupBusinessAdminPasswordPayload,
   SetTenantAccessPayload,
   UpdateStatusPayload,
 } from './app.types';
@@ -104,6 +105,11 @@ export class AppController {
   @Post('password-reset-requests')
   requestPasswordReset(@Body() body: PasswordResetRequestPayload) {
     return this.appService.requestPasswordReset(body);
+  }
+
+  @Post('auth/business-admin/setup-password')
+  setupBusinessAdminPassword(@Body() body: SetupBusinessAdminPasswordPayload) {
+    return this.appService.setupBusinessAdminPassword(body);
   }
 
   @Patch('orders/:id/status')

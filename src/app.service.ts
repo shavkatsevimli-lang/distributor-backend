@@ -23,6 +23,7 @@ import {
   SaveProductPayload,
   SaveStorePayload,
   SaveTenantPayload,
+  SetupBusinessAdminPasswordPayload,
   SetTenantAccessPayload,
   Store,
   StoreStats,
@@ -128,8 +129,9 @@ export class AppService {
         ...tenant,
         adminFullName: admin?.fullName ?? '',
         adminPhone: admin?.phone ?? '',
-        adminPassword:
-          admin?.lastIssuedPassword ?? this.visiblePassword(admin?.password ?? ''),
+        adminPassword: admin?.passwordSetupRequired
+          ? 'Biznes egasi o\'zi yaratadi'
+          : admin?.lastIssuedPassword ?? this.visiblePassword(admin?.password ?? ''),
       };
     });
   }
@@ -370,7 +372,7 @@ export class AppService {
     }
 
     const businessAdmin = businessAdmins.find(
-      (item) => item.phone === phone && this.isPasswordMatch(password, item.password),
+      (item) => item.phone === phone,
     );
     if (businessAdmin) {
       const tenant = tenants.find((item) => item.id === businessAdmin.tenantId);
@@ -387,6 +389,18 @@ export class AppService {
           message:
             'Obuna muddati tugagan yoki panel bloklangan. To\'lov qilinmaguncha tizim yopiq.',
         };
+      }
+
+      if (businessAdmin.passwordSetupRequired) {
+        return {
+          success: false,
+          message:
+            'Bu admin uchun parol hali yaratilmagan. "Biznes admin parolini yaratish" tugmasidan foydalaning.',
+        };
+      }
+
+      if (!this.isPasswordMatch(password, businessAdmin.password)) {
+        throw new UnauthorizedException('Telefon yoki parol xato');
       }
 
       return {
@@ -725,7 +739,6 @@ export class AppService {
     const adminFullName =
       this.cleanText(payload.adminFullName) || `${name} admin`;
     const adminPhone = this.cleanText(payload.adminPhone);
-    const requestedAdminPassword = this.cleanText(payload.adminPassword);
     const maxStores = Number(payload.maxStores ?? 500);
     const locale = payload.locale ?? 'uz';
     const isActive = payload.isActive ?? true;
@@ -742,19 +755,10 @@ export class AppService {
     const existingAdmin = existingTenant
       ? businessAdmins.find((item) => item.tenantId === existingTenant.id)
       : null;
-    const adminPassword =
-      requestedAdminPassword.length >= 4
-        ? requestedAdminPassword
-        : existingAdmin?.lastIssuedPassword ?? this.generateAdminPassword(adminPhone);
-
     if (!name || !phone || !adminPhone) {
       throw new BadRequestException(
         'Biznes nomi, biznes telefoni va admin telefoni shart',
       );
-    }
-
-    if (adminPassword.length < 4) {
-      throw new BadRequestException('Admin paroli kamida 4 belgili bo\'lishi kerak');
     }
 
     if (!Number.isInteger(maxStores) || maxStores <= 0) {
@@ -772,7 +776,7 @@ export class AppService {
       locale,
       adminFullName,
       adminPhone,
-      adminPassword,
+      adminPassword: '',
     };
 
     if (this.databaseService.isEnabled()) {
@@ -781,12 +785,12 @@ export class AppService {
         tenant.id,
         adminFullName,
         adminPhone,
-        this.protectPassword(adminPassword),
-        adminPassword,
+        '',
+        '',
       );
       return {
         success: true,
-        message: this.buildTenantSavedMessage(adminPhone, adminPassword),
+        message: this.buildTenantSavedMessage(adminPhone),
         tenant,
       };
     }
@@ -808,26 +812,28 @@ export class AppService {
         if (admin) {
           admin.fullName = adminFullName;
           admin.phone = adminPhone;
-          admin.password = this.protectPassword(adminPassword);
-          admin.lastIssuedPassword = adminPassword;
+          admin.passwordSetupRequired = true;
+          admin.password = '';
+          admin.lastIssuedPassword = '';
         } else {
           this.businessAdmins.push({
             id: this.businessAdmins.length + 1,
             tenantId: existing.id,
             fullName: adminFullName,
             phone: adminPhone,
-            password: this.protectPassword(adminPassword),
-            lastIssuedPassword: adminPassword,
+            password: '',
+            lastIssuedPassword: '',
+            passwordSetupRequired: true,
             role: 'business_admin',
           });
         }
 
-      return {
-        success: true,
-        message: this.buildTenantSavedMessage(adminPhone, adminPassword),
-        tenant: existing,
-      };
-    }
+        return {
+          success: true,
+          message: this.buildTenantSavedMessage(adminPhone),
+          tenant: existing,
+        };
+      }
 
     const tenant: Tenant = {
       id: this.tenants.length + 1,
@@ -845,15 +851,57 @@ export class AppService {
         tenantId: tenant.id,
         fullName: adminFullName,
         phone: adminPhone,
-        password: this.protectPassword(adminPassword),
-        lastIssuedPassword: adminPassword,
+        password: '',
+        lastIssuedPassword: '',
+        passwordSetupRequired: true,
         role: 'business_admin',
       });
 
+      return {
+        success: true,
+        message: this.buildTenantSavedMessage(adminPhone),
+        tenant,
+      };
+    }
+
+  async setupBusinessAdminPassword(payload: SetupBusinessAdminPasswordPayload) {
+    const phone = this.cleanText(payload.phone);
+    const newPassword = this.cleanText(payload.newPassword);
+    const businessAdmins = await this.loadBusinessAdmins();
+
+    if (!phone || newPassword.length < 4) {
+      throw new BadRequestException(
+        'Login va kamida 4 belgili yangi parol kiritilishi shart',
+      );
+    }
+
+    const admin = businessAdmins.find((item) => item.phone === phone);
+    if (!admin) {
+      throw new BadRequestException('Bu login bo\'yicha biznes admin topilmadi');
+    }
+
+    if (!admin.passwordSetupRequired) {
+      throw new BadRequestException('Bu admin uchun parol allaqachon yaratilgan');
+    }
+
+    if (this.databaseService.isEnabled()) {
+      await this.databaseService.setupBusinessAdminPassword(
+        phone,
+        this.protectPassword(newPassword),
+      );
+      return {
+        success: true,
+        message: 'Parol yaratildi. Endi shu login va yangi parol bilan kiring.',
+      };
+    }
+
+    admin.password = this.protectPassword(newPassword);
+    admin.lastIssuedPassword = '';
+    admin.passwordSetupRequired = false;
+
     return {
       success: true,
-      message: this.buildTenantSavedMessage(adminPhone, adminPassword),
-      tenant,
+      message: 'Parol yaratildi. Endi shu login va yangi parol bilan kiring.',
     };
   }
 
@@ -1155,7 +1203,7 @@ export class AppService {
     return '1234';
   }
 
-  private buildTenantSavedMessage(adminPhone: string, adminPassword: string): string {
-    return `Biznes panel saqlandi. Admin login: ${adminPhone}. Admin parol: ${adminPassword}`;
+  private buildTenantSavedMessage(adminPhone: string): string {
+    return `Biznes panel saqlandi. Admin login: ${adminPhone}. Parolni biznes egasi o'zi yaratadi.`;
   }
 }

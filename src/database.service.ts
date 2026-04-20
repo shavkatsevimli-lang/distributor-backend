@@ -250,6 +250,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           phone,
           password,
           last_issued_password AS "lastIssuedPassword",
+          password_setup_required AS "passwordSetupRequired",
           role
        FROM business_admins
        ORDER BY id ASC`,
@@ -497,6 +498,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     password: string,
     lastIssuedPassword: string,
   ): Promise<BusinessAdmin> {
+    const passwordSetupRequired = !password.trim();
     const existing = await this.query(
       `SELECT id FROM business_admins WHERE tenant_id = $1 LIMIT 1`,
       [tenantId],
@@ -507,24 +509,26 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         `UPDATE business_admins
          SET full_name = $2, phone = $3, password = $4
            , last_issued_password = $5
+           , password_setup_required = $6
          WHERE tenant_id = $1
          RETURNING
            id,
            tenant_id AS "tenantId",
            full_name AS "fullName",
-           phone,
-           password,
-           last_issued_password AS "lastIssuedPassword",
-           role`,
-        [tenantId, fullName, phone, password, lastIssuedPassword],
+            phone,
+            password,
+            last_issued_password AS "lastIssuedPassword",
+            password_setup_required AS "passwordSetupRequired",
+            role`,
+        [tenantId, fullName, phone, password, lastIssuedPassword, passwordSetupRequired],
       );
       return result.rows[0] as BusinessAdmin;
     }
 
     const result = await this.query(
       `INSERT INTO business_admins
-        (tenant_id, full_name, phone, password, last_issued_password, role)
-       VALUES ($1, $2, $3, $4, $5, 'business_admin')
+        (tenant_id, full_name, phone, password, last_issued_password, password_setup_required, role)
+       VALUES ($1, $2, $3, $4, $5, $6, 'business_admin')
        RETURNING
          id,
          tenant_id AS "tenantId",
@@ -532,10 +536,35 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          phone,
          password,
          last_issued_password AS "lastIssuedPassword",
+         password_setup_required AS "passwordSetupRequired",
          role`,
-      [tenantId, fullName, phone, password, lastIssuedPassword],
+      [tenantId, fullName, phone, password, lastIssuedPassword, passwordSetupRequired],
     );
     return result.rows[0] as BusinessAdmin;
+  }
+
+  async setupBusinessAdminPassword(
+    phone: string,
+    passwordHash: string,
+  ): Promise<BusinessAdmin | null> {
+    const result = await this.query(
+      `UPDATE business_admins
+       SET password = $2,
+           password_setup_required = FALSE
+       WHERE phone = $1
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         full_name AS "fullName",
+         phone,
+         password,
+         last_issued_password AS "lastIssuedPassword",
+         password_setup_required AS "passwordSetupRequired",
+         role`,
+      [phone, passwordHash],
+    );
+
+    return (result.rows[0] as BusinessAdmin | undefined) ?? null;
   }
 
   async grantSubscription(tenantId: number, months: number): Promise<Tenant | null> {
@@ -639,6 +668,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         phone TEXT NOT NULL UNIQUE,
         password TEXT NOT NULL,
         last_issued_password TEXT NULL,
+        password_setup_required BOOLEAN NOT NULL DEFAULT FALSE,
         role TEXT NOT NULL
       );
 
@@ -677,6 +707,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
+      ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS password_setup_required BOOLEAN NOT NULL DEFAULT FALSE;
     `);
   }
 
@@ -712,9 +743,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const admin of seedBusinessAdmins) {
         await this.query(
           `INSERT INTO business_admins
-            (id, tenant_id, full_name, phone, password, last_issued_password, role)
+            (id, tenant_id, full_name, phone, password, last_issued_password, password_setup_required, role)
            OVERRIDING SYSTEM VALUE
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [
             admin.id,
             admin.tenantId,
@@ -722,6 +753,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             admin.phone,
             admin.password,
             admin.lastIssuedPassword ?? admin.password,
+            admin.passwordSetupRequired ?? false,
             admin.role,
           ],
         );
@@ -806,12 +838,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private async upgradeStoredSecrets() {
     const businessAdmins = await this.query(
       `SELECT id, password, last_issued_password AS "lastIssuedPassword"
+       , password_setup_required AS "passwordSetupRequired"
        FROM business_admins`,
     );
     for (const admin of businessAdmins.rows as Array<{
       id: number;
       password: string;
       lastIssuedPassword?: string | null;
+      passwordSetupRequired?: boolean;
     }>) {
       const visiblePassword = admin.lastIssuedPassword ?? admin.password;
       const protectedPassword = this.protectPassword(admin.password);

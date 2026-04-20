@@ -58,6 +58,7 @@ export interface BusinessAdmin {
   phone: string;
   password: string;
   lastIssuedPassword?: string;
+  passwordSetupRequired?: boolean;
   role: 'business_admin';
 }
 
@@ -119,6 +120,11 @@ export interface PasswordResetRequest {
 export interface LoginPayload {
   phone?: string;
   password?: string;
+}
+
+export interface SetupBusinessAdminPasswordPayload {
+  phone?: string;
+  newPassword?: string;
 }
 
 export interface CreateOrderPayload {
