@@ -31,6 +31,27 @@ import {
 export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DatabaseService.name);
   private readonly databaseUrl = process.env.DATABASE_URL?.trim() ?? '';
+  private readonly legacyDemoTenantNames = ['Baraka Distribusiya'];
+  private readonly legacyDemoAdminPhones = ['999'];
+  private readonly legacyDemoStorePhones = [
+    '998901234567',
+    '998901111111',
+    '998902222222',
+    '998903333333',
+  ];
+  private readonly legacyDemoStoreNames = [
+    'Ali Market',
+    'Samarqand Savdo',
+    'Andijon Store',
+    'Buxoro Market',
+  ];
+  private readonly legacyDemoProductNames = [
+    'Shakar 1kg',
+    'Yog 1L',
+    'Un 50kg',
+    'Makaron',
+    'Choy 200g',
+  ];
   private pool: Pool | null = null;
   private ready = false;
 
@@ -53,6 +74,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     await this.createSchema();
     await this.seedIfNeeded();
     await this.upgradeStoredSecrets();
+    await this.cleanupLegacyDemoData();
     this.ready = true;
     this.logger.log('PostgreSQL ulanishi tayyor');
   }
@@ -178,6 +200,39 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return result.rows[0] as Product;
   }
 
+  async deleteProduct(productId: number): Promise<boolean> {
+    const result = await this.query(
+      `DELETE FROM products
+       WHERE id = $1
+       RETURNING id`,
+      [productId],
+    );
+
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  async hideProduct(productId: number): Promise<Product | null> {
+    const result = await this.query(
+      `UPDATE products
+       SET is_visible = FALSE, stock = 0
+       WHERE id = $1
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         name,
+         price,
+         stock,
+         is_visible AS "isVisible",
+         category,
+         image_url AS "imageUrl",
+         description,
+         low_stock_threshold AS "lowStockThreshold"`,
+      [productId],
+    );
+
+    return (result.rows[0] as Product | undefined) ?? null;
+  }
+
   async getStores(): Promise<Store[]> {
     const result = await this.query(
       `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
@@ -281,6 +336,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     return result.rows[0] as Store;
+  }
+
+  async deleteStore(storeId: number): Promise<boolean> {
+    const result = await this.query(
+      `DELETE FROM stores
+       WHERE id = $1
+       RETURNING id`,
+      [storeId],
+    );
+
+    return (result.rowCount ?? 0) > 0;
   }
 
   async getTenants(): Promise<Tenant[]> {
@@ -978,6 +1044,47 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         [store.id, protectedPassword, visiblePassword],
       );
     }
+  }
+
+  private async cleanupLegacyDemoData() {
+    await this.query(
+      `DELETE FROM password_reset_requests
+       WHERE phone = ANY($1)
+          OR store_name = ANY($2)`,
+      [this.legacyDemoStorePhones, this.legacyDemoStoreNames],
+    );
+
+    await this.query(
+      `DELETE FROM orders
+       WHERE customer_name = ANY($1)
+          OR product_name = ANY($2)`,
+      [this.legacyDemoStoreNames, this.legacyDemoProductNames],
+    );
+
+    await this.query(
+      `DELETE FROM stores
+       WHERE phone = ANY($1)
+          OR full_name = ANY($2)`,
+      [this.legacyDemoStorePhones, this.legacyDemoStoreNames],
+    );
+
+    await this.query(
+      `DELETE FROM products
+       WHERE name = ANY($1)`,
+      [this.legacyDemoProductNames],
+    );
+
+    await this.query(
+      `DELETE FROM business_admins
+       WHERE phone = ANY($1)`,
+      [this.legacyDemoAdminPhones],
+    );
+
+    await this.query(
+      `DELETE FROM tenants
+       WHERE name = ANY($1)`,
+      [this.legacyDemoTenantNames],
+    );
   }
 
   private protectPassword(password: string): string {

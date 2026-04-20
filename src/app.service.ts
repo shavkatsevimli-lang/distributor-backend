@@ -820,6 +820,52 @@ export class AppService {
     };
   }
 
+  async deleteProduct(productId: number) {
+    if (!Number.isInteger(productId) || productId <= 0) {
+      throw new BadRequestException('Mahsulot ID xato');
+    }
+
+    const [products, orders] = await Promise.all([
+      this.loadProducts(),
+      this.loadOrders(),
+    ]);
+    const product = products.find((item) => item.id === productId);
+
+    if (!product) {
+      throw new BadRequestException('Mahsulot topilmadi');
+    }
+
+    const hasOrderHistory = orders.some((item) => item.productId === productId);
+
+    if (hasOrderHistory) {
+      if (this.databaseService.isEnabled()) {
+        await this.databaseService.hideProduct(productId);
+      } else {
+        product.isVisible = false;
+        product.stock = 0;
+      }
+
+      return {
+        success: true,
+        message: 'Mahsulotda zakaz tarixi bor. O\'chirish o\'rniga yashirildi.',
+      };
+    }
+
+    if (this.databaseService.isEnabled()) {
+      await this.databaseService.deleteProduct(productId);
+    } else {
+      const index = this.products.findIndex((item) => item.id === productId);
+      if (index >= 0) {
+        this.products.splice(index, 1);
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Mahsulot o\'chirildi',
+    };
+  }
+
   async saveStore(payload: SaveStorePayload) {
     const fullName = this.cleanText(payload.fullName);
     const phone = this.cleanText(payload.phone);
@@ -897,6 +943,51 @@ export class AppService {
       success: true,
       message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
       store,
+    };
+  }
+
+  async deleteStore(storeId: number) {
+    if (!Number.isInteger(storeId) || storeId <= 0) {
+      throw new BadRequestException('Magazin ID xato');
+    }
+
+    const [stores, orders] = await Promise.all([
+      this.loadStores(),
+      this.loadOrders(),
+    ]);
+    const store = stores.find((item) => item.id === storeId);
+
+    if (!store) {
+      throw new BadRequestException('Magazin topilmadi');
+    }
+
+    const hasOrderHistory = orders.some((item) => item.storeId === storeId);
+
+    if (hasOrderHistory) {
+      if (this.databaseService.isEnabled()) {
+        await this.databaseService.setStoreAccess(storeId, false);
+      } else {
+        store.isActive = false;
+      }
+
+      return {
+        success: true,
+        message: 'Magazinda zakaz tarixi bor. O\'chirish o\'rniga chiqarildi.',
+      };
+    }
+
+    if (this.databaseService.isEnabled()) {
+      await this.databaseService.deleteStore(storeId);
+    } else {
+      const index = this.stores.findIndex((item) => item.id === storeId);
+      if (index >= 0) {
+        this.stores.splice(index, 1);
+      }
+    }
+
+    return {
+      success: true,
+      message: 'Magazin o\'chirildi',
     };
   }
 

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -131,6 +132,11 @@ export class AppController {
     return this.appService.saveProduct(body);
   }
 
+  @Delete('admin/products/:id')
+  deleteProduct(@Param('id', ParseIntPipe) id: number) {
+    return this.appService.deleteProduct(id);
+  }
+
   @Post('owner/tenants')
   saveTenant(@Body() body: SaveTenantPayload) {
     return this.appService.saveTenant(body);
@@ -139,6 +145,11 @@ export class AppController {
   @Post('admin/stores')
   saveStore(@Body() body: SaveStorePayload) {
     return this.appService.saveStore(body);
+  }
+
+  @Delete('admin/stores/:id')
+  deleteStore(@Param('id', ParseIntPipe) id: number) {
+    return this.appService.deleteStore(id);
   }
 
   @Patch('admin/stores/:id/access')
