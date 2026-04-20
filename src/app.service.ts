@@ -127,6 +127,22 @@ export class AppService {
       }));
   }
 
+  async getNextStoreId() {
+    if (this.databaseService.isEnabled()) {
+      return {
+        nextId: await this.databaseService.getNextStoreId(),
+      };
+    }
+
+    const usedIds = new Set(this.stores.map((item) => item.id));
+    let nextId = 1;
+    while (usedIds.has(nextId)) {
+      nextId += 1;
+    }
+
+    return { nextId };
+  }
+
   async getOwnerDashboard(): Promise<OwnerDashboard> {
     const tenants = await this.loadTenants();
     const now = Date.now();
@@ -863,8 +879,9 @@ export class AppService {
       };
     }
 
+    const nextStoreId = normalized.id ?? (await this.getNextStoreId()).nextId;
     const store: Store = {
-      id: this.stores.length + 1,
+      id: nextStoreId,
       tenantId: normalized.tenantId ?? 1,
       fullName,
       phone,

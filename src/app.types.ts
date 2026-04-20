@@ -210,6 +210,10 @@ export interface SetStoreAccessPayload {
   isActive?: boolean;
 }
 
+export interface NextStoreIdResponse {
+  nextId: number;
+}
+
 export interface OwnerDashboard {
   totalTenants: number;
   activeTenants: number;

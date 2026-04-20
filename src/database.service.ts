@@ -8,6 +8,7 @@ import { randomBytes, scryptSync } from 'crypto';
 import { Pool } from 'pg';
 import type {
   BusinessAdmin,
+  NextStoreIdResponse,
   Order,
   OrderStatus,
   PasswordResetRequest,
@@ -199,6 +200,24 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return result.rows as Store[];
   }
 
+  async getNextStoreId(): Promise<number> {
+    const result = await this.query(
+      `SELECT COALESCE(
+          (
+            SELECT MIN(candidate)
+            FROM generate_series(
+              1,
+              COALESCE((SELECT MAX(id) FROM stores), 0) + 1
+            ) AS candidate
+            LEFT JOIN stores s ON s.id = candidate
+            WHERE s.id IS NULL
+          ),
+          1
+        ) AS "nextId"`,
+    );
+    return Number((result.rows[0] as NextStoreIdResponse).nextId ?? 1);
+  }
+
   async saveStore(payload: SaveStorePayload): Promise<Store> {
     if (payload.id && payload.id > 0) {
       const result = await this.query(
@@ -234,10 +253,11 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       return result.rows[0] as Store;
     }
 
+    const nextId = payload.id ?? (await this.getNextStoreId());
     const result = await this.query(
       `INSERT INTO stores
-        (tenant_id, full_name, phone, password, last_issued_password, is_active, role, address)
-       VALUES ($1, $2, $3, $4, $5, $6, 'client', $7)
+        (id, tenant_id, full_name, phone, password, last_issued_password, is_active, role, address)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'client', $8)
        RETURNING
          id,
          tenant_id AS "tenantId",
@@ -249,6 +269,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          role,
          address`,
       [
+        nextId,
         payload.tenantId,
         payload.fullName,
         payload.phone,

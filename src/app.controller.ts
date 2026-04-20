@@ -63,6 +63,11 @@ export class AppController {
     return this.appService.getAdminStores();
   }
 
+  @Get('admin/stores/next-id')
+  getNextStoreId() {
+    return this.appService.getNextStoreId();
+  }
+
   @Get('tenants/:tenantId/admin/stores')
   getTenantAdminStores(@Param('tenantId', ParseIntPipe) tenantId: number) {
     return this.appService.getTenantAdminStores(tenantId);
