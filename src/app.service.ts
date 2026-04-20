@@ -8,6 +8,7 @@ import { DatabaseService } from './database.service';
 import {
   AdminDashboard,
   BusinessAdmin,
+  ClientTopProduct,
   CreateOrderPayload,
   ClientDashboard,
   GrantSubscriptionPayload,
@@ -200,6 +201,12 @@ export class AppService {
       },
       stats: this.buildStoreStats(store, stores, orders),
       leaderboard: this.buildLeaderboard(stores, orders).slice(0, 10),
+      topProducts: this.buildTopProducts(
+        orders.filter((order) => order.storeId === store.id),
+      ),
+      recentOrders: orders
+        .filter((order) => order.storeId === store.id)
+        .slice(0, 10),
     };
   }
 
@@ -234,6 +241,12 @@ export class AppService {
       },
       stats: this.buildStoreStats(store, tenantStores, tenantOrders),
       leaderboard: this.buildLeaderboard(tenantStores, tenantOrders).slice(0, 10),
+      topProducts: this.buildTopProducts(
+        tenantOrders.filter((order) => order.storeId === store.id),
+      ),
+      recentOrders: tenantOrders
+        .filter((order) => order.storeId === store.id)
+        .slice(0, 10),
     };
   }
 
@@ -1161,6 +1174,32 @@ export class AppService {
               ? 'Silver'
               : 'Bronze',
     };
+  }
+
+  private buildTopProducts(orders: Order[]): ClientTopProduct[] {
+    const productMap = new Map<number, ClientTopProduct>();
+
+    for (const order of orders) {
+      const current = productMap.get(order.productId) ?? {
+        productId: order.productId,
+        productName: order.productName,
+        totalQty: 0,
+        totalSpent: 0,
+        deliveredQty: 0,
+      };
+
+      current.totalQty += order.qty;
+      current.totalSpent += order.qty * order.price;
+      if (order.status === 'delivered') {
+        current.deliveredQty += order.qty;
+      }
+
+      productMap.set(order.productId, current);
+    }
+
+    return [...productMap.values()]
+      .sort((left, right) => right.totalQty - left.totalQty)
+      .slice(0, 8);
   }
 
   private buildLeaderboardFromStats(stats: StoreStats[]): StoreStats[] {

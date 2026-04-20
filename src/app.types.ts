@@ -104,6 +104,16 @@ export interface ClientDashboard {
   };
   stats: StoreStats;
   leaderboard: LeaderboardEntry[];
+  topProducts: ClientTopProduct[];
+  recentOrders: Order[];
+}
+
+export interface ClientTopProduct {
+  productId: number;
+  productName: string;
+  totalQty: number;
+  totalSpent: number;
+  deliveredQty: number;
 }
 
 export interface PasswordResetRequest {
