@@ -85,6 +85,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return result.rows as Product[];
   }
 
+  async getTenantProducts(tenantId: number): Promise<Product[]> {
+    const result = await this.query(
+      `SELECT
+          id,
+          tenant_id AS "tenantId",
+          name,
+          price,
+          stock,
+          is_visible AS "isVisible",
+          category,
+          image_url AS "imageUrl",
+          description,
+          low_stock_threshold AS "lowStockThreshold"
+       FROM products
+       WHERE tenant_id = $1
+       ORDER BY id ASC`,
+      [tenantId],
+    );
+    return result.rows as Product[];
+  }
+
   async saveProduct(payload: SaveProductPayload): Promise<Product> {
     if (payload.id && payload.id > 0) {
       const result = await this.query(
@@ -159,9 +180,21 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async getStores(): Promise<Store[]> {
     const result = await this.query(
       `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
-              last_issued_password AS "lastIssuedPassword", role, address
+              last_issued_password AS "lastIssuedPassword", is_active AS "isActive", role, address
        FROM stores
        ORDER BY id ASC`,
+    );
+    return result.rows as Store[];
+  }
+
+  async getTenantStores(tenantId: number): Promise<Store[]> {
+    const result = await this.query(
+      `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
+              last_issued_password AS "lastIssuedPassword", is_active AS "isActive", role, address
+       FROM stores
+       WHERE tenant_id = $1
+       ORDER BY id ASC`,
+      [tenantId],
     );
     return result.rows as Store[];
   }
@@ -175,7 +208,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            phone = $3,
            password = $4,
            last_issued_password = $5,
-           address = $6
+           is_active = $6,
+           address = $7
          WHERE id = $1
          RETURNING
            id,
@@ -184,6 +218,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            phone,
            password,
            last_issued_password AS "lastIssuedPassword",
+           is_active AS "isActive",
            role,
            address`,
         [
@@ -192,6 +227,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           payload.phone,
           payload.password,
           payload.lastIssuedPassword,
+          payload.isActive ?? true,
           payload.address,
         ],
       );
@@ -200,8 +236,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     const result = await this.query(
       `INSERT INTO stores
-        (tenant_id, full_name, phone, password, last_issued_password, role, address)
-       VALUES ($1, $2, $3, $4, $5, 'client', $6)
+        (tenant_id, full_name, phone, password, last_issued_password, is_active, role, address)
+       VALUES ($1, $2, $3, $4, $5, $6, 'client', $7)
        RETURNING
          id,
          tenant_id AS "tenantId",
@@ -209,6 +245,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          phone,
          password,
          last_issued_password AS "lastIssuedPassword",
+         is_active AS "isActive",
          role,
          address`,
       [
@@ -217,6 +254,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         payload.phone,
         payload.password,
         payload.lastIssuedPassword,
+        payload.isActive ?? true,
         payload.address,
       ],
     );
@@ -273,6 +311,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           created_at AS "createdAt"
        FROM orders
        ORDER BY id DESC`,
+    );
+    return result.rows as Order[];
+  }
+
+  async getTenantOrders(tenantId: number): Promise<Order[]> {
+    const result = await this.query(
+      `SELECT
+          id,
+          tenant_id AS "tenantId",
+          store_id AS "storeId",
+          product_id AS "productId",
+          product_name AS "productName",
+          qty,
+          price,
+          customer_name AS "customerName",
+          status,
+          created_at AS "createdAt"
+       FROM orders
+       WHERE tenant_id = $1
+       ORDER BY id DESC`,
+      [tenantId],
     );
     return result.rows as Order[];
   }
@@ -616,6 +675,26 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return (result.rows[0] as Tenant | undefined) ?? null;
   }
 
+  async setStoreAccess(storeId: number, isActive: boolean): Promise<Store | null> {
+    const result = await this.query(
+      `UPDATE stores
+       SET is_active = $2
+       WHERE id = $1
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         full_name AS "fullName",
+         phone,
+         password,
+         last_issued_password AS "lastIssuedPassword",
+         is_active AS "isActive",
+         role,
+         address`,
+      [storeId, isActive],
+    );
+    return (result.rows[0] as Store | undefined) ?? null;
+  }
+
   private async query(text: string, params: unknown[] = []) {
     if (!this.pool) {
       throw new Error('Database pool mavjud emas');
@@ -657,6 +736,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         phone TEXT NOT NULL UNIQUE,
         password TEXT NOT NULL,
         last_issued_password TEXT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
         role TEXT NOT NULL,
         address TEXT NOT NULL
       );
@@ -704,6 +784,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER NOT NULL DEFAULT 10;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
+      ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
@@ -792,8 +873,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     if (storeCount.rows[0].count === 0) {
       for (const store of seedStores) {
         await this.query(
-          `INSERT INTO stores (id, tenant_id, full_name, phone, password, last_issued_password, role, address)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          `INSERT INTO stores (id, tenant_id, full_name, phone, password, last_issued_password, is_active, role, address)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             store.id,
             store.tenantId,
@@ -801,6 +882,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
             store.phone,
             store.password,
             store.lastIssuedPassword ?? store.password,
+            store.isActive ?? true,
             store.role,
             store.address,
           ],

@@ -25,6 +25,7 @@ import {
   SaveStorePayload,
   SaveTenantPayload,
   SetupBusinessAdminPasswordPayload,
+  SetStoreAccessPayload,
   SetTenantAccessPayload,
   Store,
   StoreStats,
@@ -100,6 +101,10 @@ export class AppService {
     return this.loadProducts();
   }
 
+  async getTenantAdminProducts(tenantId: number): Promise<Product[]> {
+    return (await this.loadProducts()).filter((item) => item.tenantId === tenantId);
+  }
+
   async getAdminStores(): Promise<Store[]> {
     const stores = await this.loadStores();
     return stores.map((store) => ({
@@ -108,6 +113,18 @@ export class AppService {
       lastIssuedPassword:
         store.lastIssuedPassword ?? this.visiblePassword(store.password),
     }));
+  }
+
+  async getTenantAdminStores(tenantId: number): Promise<Store[]> {
+    const stores = await this.loadStores();
+    return stores
+      .filter((store) => store.tenantId === tenantId)
+      .map((store) => ({
+        ...store,
+        password: '',
+        lastIssuedPassword:
+          store.lastIssuedPassword ?? this.visiblePassword(store.password),
+      }));
   }
 
   async getOwnerDashboard(): Promise<OwnerDashboard> {
@@ -152,6 +169,10 @@ export class AppService {
     return this.loadOrders();
   }
 
+  async getTenantOrders(tenantId: number): Promise<Order[]> {
+    return (await this.loadOrders()).filter((item) => item.tenantId === tenantId);
+  }
+
   async getAdminDashboard(): Promise<AdminDashboard> {
     const [products, stores, orders] = await Promise.all([
       this.loadProducts(),
@@ -182,6 +203,39 @@ export class AppService {
     };
   }
 
+  async getTenantAdminDashboard(tenantId: number): Promise<AdminDashboard> {
+    const [products, stores, orders] = await Promise.all([
+      this.loadProducts(),
+      this.loadStores(),
+      this.loadOrders(),
+    ]);
+    const tenantProducts = products.filter((item) => item.tenantId === tenantId);
+    const tenantStores = stores.filter((item) => item.tenantId === tenantId);
+    const tenantOrders = orders.filter((item) => item.tenantId === tenantId);
+    const leaderboard = this.buildLeaderboard(tenantStores, tenantOrders);
+    const deliveredOrders = tenantOrders.filter((order) => order.status === 'delivered');
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const monthKey = todayKey.slice(0, 7);
+
+    return {
+      totalStores: tenantStores.length,
+      activeProducts: tenantProducts.filter((product) => product.isVisible).length,
+      hiddenProducts: tenantProducts.filter((product) => !product.isVisible).length,
+      pendingOrders: tenantOrders.filter((order) => order.status !== 'delivered').length,
+      deliveredOrders: deliveredOrders.length,
+      todayRevenue: deliveredOrders
+        .filter((order) => order.createdAt.startsWith(todayKey))
+        .reduce((sum, order) => sum + order.qty * order.price, 0),
+      monthRevenue: deliveredOrders
+        .filter((order) => order.createdAt.startsWith(monthKey))
+        .reduce((sum, order) => sum + order.qty * order.price, 0),
+      lowStockProducts: tenantProducts.filter(
+        (product) => product.stock <= product.lowStockThreshold,
+      ),
+      topStores: leaderboard.slice(0, 5),
+    };
+  }
+
   async getClientDashboard(storeId: number): Promise<ClientDashboard> {
     const [stores, orders] = await Promise.all([
       this.loadStores(),
@@ -191,6 +245,10 @@ export class AppService {
 
     if (!store) {
       throw new BadRequestException('Magazin topilmadi');
+    }
+
+    if (store.isActive === false) {
+      throw new BadRequestException('Bu supplier magazini bloklangan');
     }
 
     return {
@@ -228,6 +286,10 @@ export class AppService {
 
     if (!store) {
       throw new BadRequestException('Magazin topilmadi');
+    }
+
+    if (store.isActive === false) {
+      throw new BadRequestException('Bu distribyutor bo\'yicha magazin bloklangan');
     }
 
     const tenantStores = stores.filter((item) => item.tenantId === tenantId);
@@ -296,6 +358,10 @@ export class AppService {
     );
     if (!store) {
       throw new BadRequestException('Bu magazin tizimda topilmadi');
+    }
+
+    if (store.isActive === false) {
+      throw new BadRequestException('Bu magazin uchun kirish yopilgan');
     }
 
     const product = products.find(
@@ -499,6 +565,13 @@ export class AppService {
       (item) => item.phone === phone && this.isPasswordMatch(password, item.password),
     );
     if (store) {
+      if (store.isActive === false) {
+        return {
+          success: false,
+          message: 'Sizning bu distribyutor bo\'yicha loginingiz bloklangan.',
+        };
+      }
+
       const tenant = tenants.find((item) => item.id === store.tenantId);
       if (!tenant || !this.isTenantAccessible(tenant)) {
         return {
@@ -762,50 +835,53 @@ export class AppService {
       phone,
       password: this.protectPassword(password),
       lastIssuedPassword: password,
+      isActive: payload.isActive ?? existing?.isActive ?? true,
       address,
     };
 
     if (this.databaseService.isEnabled()) {
       const store = await this.databaseService.saveStore(normalized);
-        return {
-          success: true,
-          message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
-          store,
-        };
-      }
-
-      if (existing) {
-        existing.fullName = fullName;
-        existing.phone = phone;
-        existing.password = this.protectPassword(password);
-        existing.lastIssuedPassword = password;
-        existing.address = address;
-
-        return {
-          success: true,
-          message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.lastIssuedPassword}`,
-          store: existing,
-        };
-      }
-
-    const store: Store = {
-        id: this.stores.length + 1,
-        tenantId: normalized.tenantId ?? 1,
-        fullName,
-        phone,
-        password: this.protectPassword(password),
-        lastIssuedPassword: password,
-        role: 'client',
-        address,
-      };
-    this.stores.push(store);
-
       return {
         success: true,
         message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
         store,
       };
     }
+
+    if (existing) {
+      existing.fullName = fullName;
+      existing.phone = phone;
+      existing.password = this.protectPassword(password);
+      existing.lastIssuedPassword = password;
+      existing.isActive = payload.isActive ?? existing.isActive ?? true;
+      existing.address = address;
+
+      return {
+        success: true,
+        message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.lastIssuedPassword}`,
+        store: existing,
+      };
+    }
+
+    const store: Store = {
+      id: this.stores.length + 1,
+      tenantId: normalized.tenantId ?? 1,
+      fullName,
+      phone,
+      password: this.protectPassword(password),
+      lastIssuedPassword: password,
+      isActive: normalized.isActive ?? true,
+      role: 'client',
+      address,
+    };
+    this.stores.push(store);
+
+    return {
+      success: true,
+      message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
+      store,
+    };
+  }
 
   async saveTenant(payload: SaveTenantPayload) {
     const name = this.cleanText(payload.name);
@@ -1014,6 +1090,44 @@ export class AppService {
       success: true,
       message: isActive ? 'Tenant ochildi' : 'Tenant bloklandi',
       tenant,
+    };
+  }
+
+  async setStoreAccess(storeId: number, payload: SetStoreAccessPayload) {
+    const isActive = payload.isActive;
+
+    if (!Number.isInteger(storeId) || storeId <= 0) {
+      throw new BadRequestException('Magazin ID xato');
+    }
+
+    if (typeof isActive !== 'boolean') {
+      throw new BadRequestException('isActive true yoki false bo\'lishi kerak');
+    }
+
+    if (this.databaseService.isEnabled()) {
+      const store = await this.databaseService.setStoreAccess(storeId, isActive);
+      if (!store) {
+        throw new BadRequestException('Magazin topilmadi');
+      }
+
+      return {
+        success: true,
+        message: isActive ? 'Magazin qayta ochildi' : 'Magazin distribyutordan chiqarildi',
+        store,
+      };
+    }
+
+    const store = this.stores.find((item) => item.id === storeId);
+    if (!store) {
+      throw new BadRequestException('Magazin topilmadi');
+    }
+
+    store.isActive = isActive;
+
+    return {
+      success: true,
+      message: isActive ? 'Magazin qayta ochildi' : 'Magazin distribyutordan chiqarildi',
+      store,
     };
   }
 

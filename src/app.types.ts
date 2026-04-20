@@ -33,6 +33,7 @@ export interface Store {
   phone: string;
   password: string;
   lastIssuedPassword?: string;
+  isActive?: boolean;
   role: 'client';
   address: string;
 }
@@ -193,6 +194,7 @@ export interface SaveStorePayload {
   phone?: string;
   password?: string;
   lastIssuedPassword?: string;
+  isActive?: boolean;
   address?: string;
 }
 
@@ -201,6 +203,10 @@ export interface GrantSubscriptionPayload {
 }
 
 export interface SetTenantAccessPayload {
+  isActive?: boolean;
+}
+
+export interface SetStoreAccessPayload {
   isActive?: boolean;
 }
 

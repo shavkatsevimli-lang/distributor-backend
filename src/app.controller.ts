@@ -19,6 +19,7 @@ import type {
   SaveStorePayload,
   SaveTenantPayload,
   SetupBusinessAdminPasswordPayload,
+  SetStoreAccessPayload,
   SetTenantAccessPayload,
   UpdateStatusPayload,
 } from './app.types';
@@ -52,9 +53,19 @@ export class AppController {
     return this.appService.getAdminProducts();
   }
 
+  @Get('tenants/:tenantId/admin/products')
+  getTenantAdminProducts(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantAdminProducts(tenantId);
+  }
+
   @Get('admin/stores')
   getAdminStores() {
     return this.appService.getAdminStores();
+  }
+
+  @Get('tenants/:tenantId/admin/stores')
+  getTenantAdminStores(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantAdminStores(tenantId);
   }
 
   @Get('owner/dashboard')
@@ -72,9 +83,19 @@ export class AppController {
     return this.appService.getOrders();
   }
 
+  @Get('tenants/:tenantId/orders')
+  getTenantOrders(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantOrders(tenantId);
+  }
+
   @Get('admin/dashboard')
   getAdminDashboard() {
     return this.appService.getAdminDashboard();
+  }
+
+  @Get('tenants/:tenantId/admin/dashboard')
+  getTenantAdminDashboard(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantAdminDashboard(tenantId);
   }
 
   @Get('clients/:id/dashboard')
@@ -113,6 +134,14 @@ export class AppController {
   @Post('admin/stores')
   saveStore(@Body() body: SaveStorePayload) {
     return this.appService.saveStore(body);
+  }
+
+  @Patch('admin/stores/:id/access')
+  setStoreAccess(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: SetStoreAccessPayload,
+  ) {
+    return this.appService.setStoreAccess(id, body);
   }
 
   @Post('password-reset-requests')
