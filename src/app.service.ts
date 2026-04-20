@@ -57,11 +57,15 @@ export class AppService {
   private readonly orders: Order[] = [...seedOrders];
   private readonly passwordResetRequests: PasswordResetRequest[] = [];
 
+  private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE);
+  private readonly ownerPasswordHash = this.protectPassword(
+    this.cleanText(process.env.OWNER_PASSWORD),
+  );
   private readonly platformOwner = {
     id: 999,
     fullName: process.env.OWNER_FULL_NAME ?? 'Platform Owner',
-    phone: process.env.OWNER_PHONE ?? '111',
-    password: this.protectPassword(process.env.OWNER_PASSWORD ?? '111'),
+    phone: this.ownerPhone,
+    password: this.ownerPasswordHash,
     role: 'platform_owner',
   } as const;
 
@@ -75,7 +79,7 @@ export class AppService {
     return {
       app: 'DistributorPro SaaS Backend',
       version: '2026.04.20-owner-panel',
-      ownerLoginEnabled: true,
+      ownerLoginEnabled: this.isOwnerLoginEnabled(),
       businessAdminEnabled: true,
       clientAppEnabled: true,
     };
@@ -505,6 +509,7 @@ export class AppService {
     }
 
     if (
+      this.isOwnerLoginEnabled() &&
       phone === this.platformOwner.phone &&
       this.isPasswordMatch(password, this.platformOwner.password)
     ) {
@@ -1323,6 +1328,10 @@ export class AppService {
 
   private cleanText(value?: string): string {
     return (value ?? '').trim();
+  }
+
+  private isOwnerLoginEnabled(): boolean {
+    return !!this.ownerPhone && !!this.ownerPasswordHash;
   }
 
   private isTenantAccessible(tenant: Tenant): boolean {
