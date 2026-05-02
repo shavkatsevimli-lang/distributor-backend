@@ -9,6 +9,7 @@ import {
   AdminDashboard,
   BusinessAdmin,
   CartOrderItemPayload,
+  ChangeMarketPasswordPayload,
   ClientTopProduct,
   CreateCartOrderPayload,
   CreateOrderPayload,
@@ -18,15 +19,21 @@ import {
   LoginPayload,
   OwnerDashboard,
   Order,
+  OrderBatchSummary,
   OrderStatus,
   PasswordResetRequest,
   PasswordResetRequestPayload,
   Product,
   ResolvePasswordResetPayload,
+  ResetAdminPasswordPayload,
   SaveProductPayload,
   SaveStorePayload,
   SaveTenantPayload,
+  SetupStoreOwnerPasswordPayload,
   SetupBusinessAdminPasswordPayload,
+  StoreLinkRequest,
+  StoreOwnerProfile,
+  StorePanelLink,
   SetStoreAccessPayload,
   SetTenantAccessPayload,
   Store,
@@ -54,14 +61,20 @@ export class AppService {
   private readonly stores: Store[] = seedStores.map((store) => ({
     ...store,
     lastIssuedPassword: store.lastIssuedPassword ?? store.password,
+    passwordChangeRequired: store.passwordChangeRequired ?? false,
     password: this.protectPassword(store.password),
   }));
   private readonly orders: Order[] = [...seedOrders];
   private readonly passwordResetRequests: PasswordResetRequest[] = [];
+  private readonly storeOwnerProfiles: StoreOwnerProfile[] = [];
+  private readonly storeLinkRequests: StoreLinkRequest[] = [];
 
-  private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE || '111');
-  private readonly ownerPasswordHash = this.protectPassword(
+  private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE || '+998937344148');
+  private ownerPasswordHash = this.protectPassword(
     this.cleanText(process.env.OWNER_PASSWORD || '111'),
+  );
+  private readonly ownerResetKey = this.cleanText(
+    process.env.OWNER_RESET_KEY || '111111',
   );
   private readonly platformOwner = {
     id: 999,
@@ -79,11 +92,10 @@ export class AppService {
 
   getVersion() {
     return {
-      app: 'DistributorPro SaaS Backend',
-      version: '2026.04.20-owner-panel',
-      ownerLoginEnabled: this.isOwnerLoginEnabled(),
-      businessAdminEnabled: true,
-      clientAppEnabled: true,
+      app: 'Avto Zakaz Private Backend',
+      version: '2026.05.01-private-admin-market',
+      adminEnabled: true,
+      marketEnabled: true,
     };
   }
 
@@ -195,6 +207,12 @@ export class AppService {
     return (await this.loadOrders()).filter((item) => item.tenantId === tenantId);
   }
 
+  async getTenantOrderBatches(tenantId: number): Promise<OrderBatchSummary[]> {
+    return this.buildOrderBatches(
+      (await this.loadOrders()).filter((item) => item.tenantId === tenantId),
+    );
+  }
+
   async getAdminDashboard(): Promise<AdminDashboard> {
     const [products, stores, orders] = await Promise.all([
       this.loadProducts(),
@@ -270,7 +288,7 @@ export class AppService {
     }
 
     if (store.isActive === false) {
-      throw new BadRequestException('Bu supplier magazini bloklangan');
+      throw new BadRequestException('Bu magazin bloklangan');
     }
 
     return {
@@ -339,12 +357,19 @@ export class AppService {
       this.loadProducts(),
       this.loadStores(),
     ]);
+    const batchMeta = this.createBatchMeta(
+      Number(payload.tenantId),
+      Number(payload.storeId),
+      this.cleanText(payload.customerName),
+      1,
+    );
     const newOrder = this.prepareOrderDraft(
       payload,
       products,
       stores,
       new Map<number, number>(),
       1,
+      batchMeta,
     );
 
     if (this.databaseService.isEnabled()) {
@@ -381,6 +406,12 @@ export class AppService {
     }
 
     const reservedStock = new Map<number, number>();
+    const batchMeta = this.createBatchMeta(
+      Number(payload.tenantId),
+      Number(payload.storeId),
+      this.cleanText(payload.customerName),
+      items.length,
+    );
     const draftOrders = items.map((item, index) =>
       this.prepareOrderDraft(
         {
@@ -396,6 +427,7 @@ export class AppService {
         stores,
         reservedStock,
         index + 1,
+        batchMeta,
       ),
     );
 
@@ -487,11 +519,88 @@ export class AppService {
     };
   }
 
+  async updateOrderBatchStatus(
+    batchId: string,
+    payload: UpdateStatusPayload,
+    adminKey?: string,
+  ) {
+    this.ensureAdminKey(adminKey);
+
+    const cleanBatchId = this.cleanText(batchId);
+    if (!cleanBatchId) {
+      throw new BadRequestException('Zakaz partiya ID xato');
+    }
+
+    if (cleanBatchId.startsWith('single-')) {
+      const singleOrderId = Number(cleanBatchId.replace('single-', ''));
+      if (!Number.isInteger(singleOrderId) || singleOrderId <= 0) {
+        throw new BadRequestException('Zakaz partiya ID xato');
+      }
+
+      return this.updateOrderStatus(singleOrderId, payload, adminKey);
+    }
+
+    const requestedStatus = this.normalizeStatus(payload.status);
+    const orders = (await this.loadOrders()).filter(
+      (item) => this.resolveBatchId(item) === cleanBatchId,
+    );
+
+    if (orders.length === 0) {
+      throw new BadRequestException('Zakaz partiyasi topilmadi');
+    }
+
+    const uniqueStatuses = [...new Set(orders.map((item) => item.status))];
+    if (uniqueStatuses.length !== 1) {
+      throw new BadRequestException(
+        'Bu zakaz partiyasidagi statuslar aralashib ketgan',
+      );
+    }
+
+    const currentStatus = uniqueStatuses[0];
+    if (currentStatus === requestedStatus) {
+      return {
+        success: true,
+        message: `Zakaz partiyasi allaqachon ${requestedStatus} holatda`,
+        batchId: cleanBatchId,
+      };
+    }
+
+    if (!this.canMoveToNextStatus(currentStatus, requestedStatus)) {
+      throw new BadRequestException(
+        `Status faqat ketma-ket o'zgaradi: new -> approved -> delivered`,
+      );
+    }
+
+    if (this.databaseService.isEnabled()) {
+      const updatedOrders = await this.databaseService.updateOrderBatchStatus(
+        cleanBatchId,
+        requestedStatus,
+      );
+
+      return {
+        success: true,
+        message: `${updatedOrders.length} ta mahsulotli zakaz ${requestedStatus} ga o'tdi`,
+        batchId: cleanBatchId,
+      };
+    }
+
+    this.orders
+      .filter((item) => this.resolveBatchId(item) === cleanBatchId)
+      .forEach((item) => {
+        item.status = requestedStatus;
+      });
+
+    return {
+      success: true,
+      message: `${orders.length} ta mahsulotli zakaz ${requestedStatus} ga o'tdi`,
+      batchId: cleanBatchId,
+    };
+  }
+
   async login(payload: LoginPayload) {
-    const [stores, tenants, businessAdmins] = await Promise.all([
+    const [stores, tenants] = await Promise.all([
       this.loadStores(),
       this.loadTenants(),
-      this.loadBusinessAdmins(),
     ]);
     const phone = this.cleanText(payload.phone);
     const password = this.cleanText(payload.password);
@@ -510,66 +619,17 @@ export class AppService {
         message: 'Platform owner login successful',
         user: {
           id: this.platformOwner.id,
-          fullName: this.platformOwner.fullName,
+          fullName: this.platformOwner.fullName || 'Admin',
           phone: this.platformOwner.phone,
-          role: this.platformOwner.role,
-          storeId: 0,
-          bonusBalance: 0,
-          tier: 'owner',
-          tenantId: 0,
-          subscriptionEndsAt: null,
-          isBlocked: false,
-        },
-      };
-    }
-
-    const businessAdmin = businessAdmins.find(
-      (item) => item.phone === phone,
-    );
-    if (businessAdmin) {
-      const tenant = tenants.find((item) => item.id === businessAdmin.tenantId);
-      if (!tenant) {
-        return {
-          success: false,
-          message: 'Biznes tenant topilmadi',
-        };
-      }
-
-      if (!this.isTenantAccessible(tenant)) {
-        return {
-          success: false,
-          message:
-            'Obuna muddati tugagan yoki panel bloklangan. To\'lov qilinmaguncha tizim yopiq.',
-        };
-      }
-
-      if (businessAdmin.passwordSetupRequired) {
-        return {
-          success: false,
-          message:
-            'Bu admin uchun parol hali yaratilmagan. "Biznes admin parolini yaratish" tugmasidan foydalaning.',
-        };
-      }
-
-      if (!this.isPasswordMatch(password, businessAdmin.password)) {
-        throw new UnauthorizedException('Telefon yoki parol xato');
-      }
-
-      return {
-        success: true,
-        message: 'Business admin login successful',
-        user: {
-          id: businessAdmin.id,
-          fullName: businessAdmin.fullName,
-          phone: businessAdmin.phone,
-          role: businessAdmin.role,
+          role: 'admin',
           storeId: 0,
           bonusBalance: 0,
           tier: 'admin',
-          tenantId: tenant.id,
-          tenantName: tenant.name,
-          subscriptionEndsAt: tenant.subscriptionEndsAt,
+          tenantId: 1,
+          tenantName: 'Avto Zakaz',
+          subscriptionEndsAt: null,
           isBlocked: false,
+          mustChangePassword: false,
         },
       };
     }
@@ -602,7 +662,7 @@ export class AppService {
           id: store.id,
           fullName: store.fullName,
           phone: store.phone,
-          role: store.role,
+          role: 'market',
           storeId: store.id,
           bonusBalance: stats.bonusBalance,
           tier: stats.tier,
@@ -610,11 +670,150 @@ export class AppService {
           tenantName: tenant.name,
           subscriptionEndsAt: tenant.subscriptionEndsAt,
           isBlocked: false,
+          mustChangePassword: store.passwordChangeRequired === true,
         },
       };
     }
 
     throw new UnauthorizedException('Telefon yoki parol xato');
+  }
+
+  async setupStoreOwnerPassword(payload: SetupStoreOwnerPasswordPayload) {
+    throw new BadRequestException(
+      'Bu yo\'l yopilgan. Avval vaqtinchalik parol bilan kiring, keyin yangi parol qo\'ying.',
+    );
+  }
+
+  async changeMarketPassword(payload: ChangeMarketPasswordPayload) {
+    const phone = this.cleanText(payload.phone);
+    const currentPassword = this.cleanText(payload.currentPassword);
+    const newPassword = this.cleanText(payload.newPassword);
+
+    if (!phone || !currentPassword || newPassword.length < 4) {
+      throw new BadRequestException(
+        'Login, joriy parol va kamida 4 belgili yangi parol kiriting',
+      );
+    }
+
+    const stores = await this.loadStores();
+    const store = stores.find((item) => item.phone === phone);
+    if (!store) {
+      throw new BadRequestException('Bu login bo\'yicha market topilmadi');
+    }
+
+    if (!this.isPasswordMatch(currentPassword, store.password)) {
+      throw new UnauthorizedException('Joriy parol xato');
+    }
+
+    if (this.databaseService.isEnabled()) {
+      const updated = await this.databaseService.updateStorePassword(
+        store.id,
+        this.protectPassword(newPassword),
+        true,
+      );
+      return {
+        success: true,
+        message: 'Parol yangilandi',
+        store: updated,
+      };
+    }
+
+    store.password = this.protectPassword(newPassword);
+    store.lastIssuedPassword = '';
+    store.passwordChangeRequired = false;
+
+    return {
+      success: true,
+      message: 'Parol yangilandi',
+      store,
+    };
+  }
+
+  async resetAdminPassword(payload: ResetAdminPasswordPayload) {
+    const phone = this.cleanText(payload.phone);
+    const resetKey = this.cleanText(payload.resetKey);
+    const newPassword = this.cleanText(payload.newPassword);
+
+    if (!phone || !resetKey || newPassword.length < 4) {
+      throw new BadRequestException(
+        'Login, tiklash kaliti va kamida 4 belgili yangi parol kiriting',
+      );
+    }
+
+    if (phone !== this.ownerPhone) {
+      throw new UnauthorizedException('Admin login xato');
+    }
+
+    if (resetKey !== this.ownerResetKey) {
+      throw new UnauthorizedException('Tiklash kaliti xato');
+    }
+
+    this.ownerPasswordHash = this.protectPassword(newPassword);
+
+    return {
+      success: true,
+      message: 'Admin paroli yangilandi',
+    };
+  }
+
+  async getStoreOwnerApprovals(phone: string) {
+    const cleanPhone = this.cleanText(phone);
+    if (!cleanPhone) {
+      throw new BadRequestException('Telefon kiritilishi shart');
+    }
+
+    return this.getStoreLinkRequestsByPhone(cleanPhone, 'pending');
+  }
+
+  async resolveStoreOwnerApproval(requestId: number, approved: boolean) {
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new BadRequestException('Taklif ID xato');
+    }
+
+    if (this.databaseService.isEnabled()) {
+      const request = await this.databaseService.resolveStoreLinkRequest(
+        requestId,
+        approved,
+      );
+      if (!request) {
+        throw new BadRequestException('Taklif topilmadi');
+      }
+      return {
+        success: true,
+        message: approved
+          ? 'Panel ulanishi tasdiqlandi'
+          : 'Panel ulanishi rad qilindi',
+        request,
+      };
+    }
+
+    const request = this.storeLinkRequests.find((item) => item.id === requestId);
+    if (!request) {
+      throw new BadRequestException('Taklif topilmadi');
+    }
+    request.status = approved ? 'approved' : 'rejected';
+    request.approvedAt = approved ? new Date().toISOString() : null;
+    const store = this.stores.find((item) => item.id === request.storeId);
+    if (store) {
+      store.isActive = approved;
+      store.approvalStatus = approved ? 'approved' : 'rejected';
+    }
+    return {
+      success: true,
+      message: approved
+        ? 'Panel ulanishi tasdiqlandi'
+        : 'Panel ulanishi rad qilindi',
+      request,
+    };
+  }
+
+  async getStorePanels(phone: string) {
+    const cleanPhone = this.cleanText(phone);
+    if (!cleanPhone) {
+      throw new BadRequestException('Telefon kiritilishi shart');
+    }
+
+    return this.getStorePanelsByPhone(cleanPhone);
   }
 
   async requestPasswordReset(payload: PasswordResetRequestPayload) {
@@ -709,6 +908,7 @@ export class AppService {
 
     store.password = this.protectPassword(newPassword);
     store.lastIssuedPassword = newPassword;
+    store.passwordChangeRequired = true;
     request.status = 'resolved';
     request.resolvedAt = new Date().toISOString();
 
@@ -867,33 +1067,36 @@ export class AppService {
     const fullName = this.cleanText(payload.fullName);
     const phone = this.cleanText(payload.phone);
     const address = this.cleanText(payload.address);
-    const requestedPassword = this.cleanText(payload.password);
     const stores = await this.loadStores();
     const existing = payload.id
       ? stores.find((item) => item.id === Number(payload.id))
-      : null;
-    const password =
-      requestedPassword.length >= 4
-        ? requestedPassword
-        : existing?.lastIssuedPassword ?? this.generateAdminPassword(phone);
+      : stores.find(
+          (item) =>
+            item.tenantId === Number(payload.tenantId ?? 1) && item.phone === phone,
+        ) ?? null;
 
     if (!fullName || !phone || !address) {
       throw new BadRequestException(
         'Magazin nomi, telefoni va lokatsiyasi shart',
       );
     }
-
-    if (password.length < 4) {
-      throw new BadRequestException('Magazin paroli kamida 4 belgili bo\'lishi kerak');
-    }
+    const temporaryPassword =
+      this.cleanText(payload.lastIssuedPassword) || this.generateAdminPassword(phone);
+    const shouldResetToTemporary = this.cleanText(payload.password) === '__RESET_TEMP__';
+    const passwordHash = this.protectPassword(temporaryPassword);
 
     const normalized: SaveStorePayload = {
       id: payload.id ? Number(payload.id) : undefined,
       tenantId: payload.tenantId ? Number(payload.tenantId) : 1,
       fullName,
       phone,
-      password: this.protectPassword(password),
-      lastIssuedPassword: password,
+      password:
+        existing && !shouldResetToTemporary
+          ? existing.password
+          : passwordHash,
+      lastIssuedPassword:
+        existing && !shouldResetToTemporary ? existing.lastIssuedPassword : temporaryPassword,
+      passwordChangeRequired: !payload.id || shouldResetToTemporary,
       isActive: payload.isActive ?? existing?.isActive ?? true,
       address,
     };
@@ -902,7 +1105,10 @@ export class AppService {
       const store = await this.databaseService.saveStore(normalized);
       return {
         success: true,
-        message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
+        message:
+          payload.id
+            ? `Market yangilandi. Login: ${store.phone}`
+            : `Market qo'shildi. Login: ${store.phone}. Vaqtinchalik parol: ${temporaryPassword}`,
         store,
       };
     }
@@ -910,14 +1116,21 @@ export class AppService {
     if (existing) {
       existing.fullName = fullName;
       existing.phone = phone;
-      existing.password = this.protectPassword(password);
-      existing.lastIssuedPassword = password;
-      existing.isActive = payload.isActive ?? existing.isActive ?? true;
       existing.address = address;
+      existing.isActive = payload.isActive ?? existing.isActive ?? true;
+      existing.approvalStatus = existing.isActive == false ? 'blocked' : 'approved';
+      if (shouldResetToTemporary) {
+        existing.password = passwordHash;
+        existing.lastIssuedPassword = temporaryPassword;
+        existing.passwordChangeRequired = true;
+      }
 
       return {
         success: true,
-        message: `Magazin saqlandi. Login: ${existing.phone}. Parol: ${existing.lastIssuedPassword}`,
+        message:
+          shouldResetToTemporary
+            ? `Market uchun yangi vaqtinchalik parol berildi: ${temporaryPassword}`
+            : `Market yangilandi. Login: ${existing.phone}`,
         store: existing,
       };
     }
@@ -928,17 +1141,20 @@ export class AppService {
       tenantId: normalized.tenantId ?? 1,
       fullName,
       phone,
-      password: this.protectPassword(password),
-      lastIssuedPassword: password,
-      isActive: normalized.isActive ?? true,
+      password: passwordHash,
+      lastIssuedPassword: temporaryPassword,
+      passwordChangeRequired: true,
+      isActive: true,
       role: 'client',
       address,
+      approvalStatus: 'approved',
     };
     this.stores.push(store);
 
     return {
       success: true,
-      message: `Magazin saqlandi. Login: ${store.phone}. Parol: ${store.lastIssuedPassword}`,
+      message:
+        `Market qo'shildi. Login: ${store.phone}. Vaqtinchalik parol: ${temporaryPassword}`,
       store,
     };
   }
@@ -1290,6 +1506,10 @@ export class AppService {
     stores: Store[],
     reservedStock: Map<number, number>,
     orderSequence: number,
+    batchMeta?: {
+      batchId: string;
+      batchLabel: string;
+    },
   ): Order {
     const tenantId = Number(payload.tenantId);
     const storeId = Number(payload.storeId);
@@ -1358,6 +1578,8 @@ export class AppService {
       id: this.orders.length + orderSequence,
       tenantId: store.tenantId,
       storeId: store.id,
+      batchId: batchMeta?.batchId ?? null,
+      batchLabel: batchMeta?.batchLabel ?? null,
       productId,
       productName: productName || product.name,
       qty,
@@ -1400,6 +1622,58 @@ export class AppService {
     return this.stores;
   }
 
+  private async loadStoreOwnerProfileByPhone(
+    phone: string,
+  ): Promise<StoreOwnerProfile | null> {
+    if (this.databaseService.isEnabled()) {
+      return this.databaseService.getStoreOwnerProfileByPhone(phone);
+    }
+
+    return this.storeOwnerProfiles.find((item) => item.phone === phone) ?? null;
+  }
+
+  private async getStoreLinkRequestsByPhone(
+    phone: string,
+    status?: 'pending' | 'approved' | 'rejected' | 'blocked',
+  ): Promise<StoreLinkRequest[]> {
+    if (this.databaseService.isEnabled()) {
+      return this.databaseService.getStoreLinkRequestsByPhone(phone, status);
+    }
+
+    const profile = this.storeOwnerProfiles.find((item) => item.phone === phone);
+    if (!profile) {
+      return [];
+    }
+
+    return this.storeLinkRequests.filter(
+      (item) =>
+        item.profileId === profile.id && (!status || item.status === status),
+    );
+  }
+
+  private async getStorePanelsByPhone(phone: string): Promise<StorePanelLink[]> {
+    if (this.databaseService.isEnabled()) {
+      return this.databaseService.getApprovedStorePanelsByPhone(phone);
+    }
+
+    const profile = this.storeOwnerProfiles.find((item) => item.phone === phone);
+    if (!profile) {
+      return [];
+    }
+
+    return this.storeLinkRequests
+      .filter((item) => item.profileId === profile.id && item.status === 'approved')
+      .map((item) => ({
+        tenantId: item.tenantId,
+        tenantName: item.tenantName,
+        storeId: item.storeId,
+        storeName: item.storeName,
+        phone: item.phone,
+        address: item.address,
+        status: 'approved',
+      }));
+  }
+
   private async loadOrders(): Promise<Order[]> {
     if (this.databaseService.isEnabled()) {
       return this.databaseService.getOrders();
@@ -1417,7 +1691,73 @@ export class AppService {
   }
 
   private isTenantAccessible(tenant: Tenant): boolean {
-    return tenant.isActive && new Date(tenant.subscriptionEndsAt).getTime() > Date.now();
+    return tenant.isActive !== false;
+  }
+
+  private createBatchMeta(
+    tenantId: number,
+    storeId: number,
+    customerName: string,
+    itemCount: number,
+  ) {
+    const safeCustomer = customerName || 'Magazin';
+    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+    return {
+      batchId: `T${tenantId}-S${storeId}-${stamp}-${itemCount}`,
+      batchLabel:
+        itemCount > 1
+          ? `${safeCustomer} savati`
+          : `${safeCustomer} tez zakazi`,
+    };
+  }
+
+  private resolveBatchId(order: Order): string {
+    return this.cleanText(order.batchId ?? undefined) || `single-${order.id}`;
+  }
+
+  private buildOrderBatches(orders: Order[]): OrderBatchSummary[] {
+    const grouped = new Map<string, Order[]>();
+
+    for (const order of orders) {
+      const key = this.resolveBatchId(order);
+      const current = grouped.get(key) ?? [];
+      current.push(order);
+      grouped.set(key, current);
+    }
+
+    return [...grouped.entries()]
+      .map(([batchId, batchOrders]) => {
+        const sortedItems = [...batchOrders].sort((left, right) => left.id - right.id);
+        const first = sortedItems[0];
+        const statuses = sortedItems.map((item) => item.status);
+        const status = statuses.includes('new')
+          ? 'new'
+          : statuses.includes('approved')
+            ? 'approved'
+            : 'delivered';
+
+        return {
+          batchId,
+          batchLabel:
+            this.cleanText(first.batchLabel ?? undefined) ||
+            (sortedItems.length > 1
+              ? `${first.customerName} savati`
+              : `${first.customerName} zakazi`),
+          tenantId: first.tenantId,
+          storeId: first.storeId,
+          customerName: first.customerName,
+          status,
+          createdAt: first.createdAt,
+          itemCount: sortedItems.length,
+          totalQty: sortedItems.reduce((sum, item) => sum + item.qty, 0),
+          totalAmount: sortedItems.reduce(
+            (sum, item) => sum + item.qty * item.price,
+            0,
+          ),
+          items: sortedItems,
+        } as OrderBatchSummary;
+      })
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   private buildLeaderboard(stores: Store[], orders: Order[]): LeaderboardEntry[] {

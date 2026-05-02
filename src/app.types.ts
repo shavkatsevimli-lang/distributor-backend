@@ -17,6 +17,8 @@ export interface Order {
   id: number;
   tenantId?: number;
   storeId?: number;
+  batchId?: string | null;
+  batchLabel?: string | null;
   productId: number;
   productName: string;
   qty: number;
@@ -33,9 +35,44 @@ export interface Store {
   phone: string;
   password: string;
   lastIssuedPassword?: string;
+  passwordChangeRequired?: boolean;
   isActive?: boolean;
   role: 'client';
   address: string;
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'blocked';
+}
+
+export interface StoreOwnerProfile {
+  id: number;
+  fullName: string;
+  phone: string;
+  password: string;
+  lastIssuedPassword?: string;
+  isVerified: boolean;
+}
+
+export interface StoreLinkRequest {
+  id: number;
+  profileId: number;
+  tenantId: number;
+  tenantName: string;
+  storeId: number;
+  storeName: string;
+  phone: string;
+  address: string;
+  status: 'pending' | 'approved' | 'rejected' | 'blocked';
+  requestedAt: string;
+  approvedAt?: string | null;
+}
+
+export interface StorePanelLink {
+  tenantId: number;
+  tenantName: string;
+  storeId: number;
+  storeName: string;
+  phone: string;
+  address: string;
+  status: 'approved' | 'blocked';
 }
 
 export interface Tenant {
@@ -117,6 +154,20 @@ export interface ClientTopProduct {
   deliveredQty: number;
 }
 
+export interface OrderBatchSummary {
+  batchId: string;
+  batchLabel: string;
+  tenantId?: number;
+  storeId?: number;
+  customerName: string;
+  status: OrderStatus;
+  createdAt: string;
+  itemCount: number;
+  totalQty: number;
+  totalAmount: number;
+  items: Order[];
+}
+
 export interface PasswordResetRequest {
   id: number;
   tenantId?: number;
@@ -131,6 +182,12 @@ export interface PasswordResetRequest {
 export interface LoginPayload {
   phone?: string;
   password?: string;
+}
+
+export interface SetupStoreOwnerPasswordPayload {
+  phone?: string;
+  fullName?: string;
+  newPassword?: string;
 }
 
 export interface SetupBusinessAdminPasswordPayload {
@@ -208,8 +265,21 @@ export interface SaveStorePayload {
   phone?: string;
   password?: string;
   lastIssuedPassword?: string;
+  passwordChangeRequired?: boolean;
   isActive?: boolean;
   address?: string;
+}
+
+export interface ChangeMarketPasswordPayload {
+  phone?: string;
+  currentPassword?: string;
+  newPassword?: string;
+}
+
+export interface ResetAdminPasswordPayload {
+  phone?: string;
+  resetKey?: string;
+  newPassword?: string;
 }
 
 export interface GrantSubscriptionPayload {
@@ -222,6 +292,10 @@ export interface SetTenantAccessPayload {
 
 export interface SetStoreAccessPayload {
   isActive?: boolean;
+}
+
+export interface ResolveStoreLinkPayload {
+  approved?: boolean;
 }
 
 export interface NextStoreIdResponse {

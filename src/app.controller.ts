@@ -11,15 +11,19 @@ import {
 } from '@nestjs/common';
 import { AppService } from './app.service';
 import type {
+  ChangeMarketPasswordPayload,
   CreateCartOrderPayload,
   CreateOrderPayload,
   GrantSubscriptionPayload,
   LoginPayload,
   PasswordResetRequestPayload,
   ResolvePasswordResetPayload,
+  ResolveStoreLinkPayload,
+  ResetAdminPasswordPayload,
   SaveProductPayload,
   SaveStorePayload,
   SaveTenantPayload,
+  SetupStoreOwnerPasswordPayload,
   SetupBusinessAdminPasswordPayload,
   SetStoreAccessPayload,
   SetTenantAccessPayload,
@@ -93,6 +97,11 @@ export class AppController {
   @Get('tenants/:tenantId/orders')
   getTenantOrders(@Param('tenantId', ParseIntPipe) tenantId: number) {
     return this.appService.getTenantOrders(tenantId);
+  }
+
+  @Get('tenants/:tenantId/order-batches')
+  getTenantOrderBatches(@Param('tenantId', ParseIntPipe) tenantId: number) {
+    return this.appService.getTenantOrderBatches(tenantId);
   }
 
   @Get('admin/dashboard')
@@ -176,6 +185,39 @@ export class AppController {
     return this.appService.setupBusinessAdminPassword(body);
   }
 
+  @Post('auth/store-owner/setup-password')
+  setupStoreOwnerPassword(@Body() body: SetupStoreOwnerPasswordPayload) {
+    return this.appService.setupStoreOwnerPassword(body);
+  }
+
+  @Post('auth/market/change-password')
+  changeMarketPassword(@Body() body: ChangeMarketPasswordPayload) {
+    return this.appService.changeMarketPassword(body);
+  }
+
+  @Post('auth/admin/reset-password')
+  resetAdminPassword(@Body() body: ResetAdminPasswordPayload) {
+    return this.appService.resetAdminPassword(body);
+  }
+
+  @Get('store-owner/:phone/approvals')
+  getStoreOwnerApprovals(@Param('phone') phone: string) {
+    return this.appService.getStoreOwnerApprovals(phone);
+  }
+
+  @Get('store-owner/:phone/panels')
+  getStoreOwnerPanels(@Param('phone') phone: string) {
+    return this.appService.getStorePanels(phone);
+  }
+
+  @Patch('store-owner/approvals/:id')
+  resolveStoreOwnerApproval(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: ResolveStoreLinkPayload,
+  ) {
+    return this.appService.resolveStoreOwnerApproval(id, body.approved === true);
+  }
+
   @Patch('orders/:id/status')
   updateOrderStatus(
     @Param('id', ParseIntPipe) id: number,
@@ -183,6 +225,15 @@ export class AppController {
     @Headers('x-admin-key') adminKey?: string,
   ) {
     return this.appService.updateOrderStatus(id, body, adminKey);
+  }
+
+  @Patch('order-batches/:batchId/status')
+  updateOrderBatchStatus(
+    @Param('batchId') batchId: string,
+    @Body() body: UpdateStatusPayload,
+    @Headers('x-admin-key') adminKey?: string,
+  ) {
+    return this.appService.updateOrderBatchStatus(batchId, body, adminKey);
   }
 
   @Post('login')

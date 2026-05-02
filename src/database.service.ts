@@ -16,6 +16,9 @@ import type {
   SaveProductPayload,
   SaveStorePayload,
   SaveTenantPayload,
+  StoreLinkRequest,
+  StoreOwnerProfile,
+  StorePanelLink,
   Store,
   Tenant,
 } from './app.types';
@@ -103,7 +106,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           description,
           low_stock_threshold AS "lowStockThreshold"
        FROM products
-       ORDER BY id ASC`,
+       ORDER BY s.id ASC`,
     );
     return result.rows as Product[];
   }
@@ -235,9 +238,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async getStores(): Promise<Store[]> {
     const result = await this.query(
-      `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
-              last_issued_password AS "lastIssuedPassword", is_active AS "isActive", role, address
-       FROM stores
+      `SELECT s.id, s.tenant_id AS "tenantId", s.full_name AS "fullName", s.phone, s.password,
+              s.last_issued_password AS "lastIssuedPassword", s.password_change_required AS "passwordChangeRequired",
+              s.is_active AS "isActive", s.role, s.address,
+              COALESCE(sl.status, CASE WHEN s.is_active THEN 'approved' ELSE 'blocked' END) AS "approvalStatus"
+       FROM stores s
+       LEFT JOIN store_link_requests sl ON sl.store_id = s.id
        ORDER BY id ASC`,
     );
     return result.rows as Store[];
@@ -245,11 +251,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async getTenantStores(tenantId: number): Promise<Store[]> {
     const result = await this.query(
-      `SELECT id, tenant_id AS "tenantId", full_name AS "fullName", phone, password,
-              last_issued_password AS "lastIssuedPassword", is_active AS "isActive", role, address
-       FROM stores
-       WHERE tenant_id = $1
-       ORDER BY id ASC`,
+      `SELECT s.id, s.tenant_id AS "tenantId", s.full_name AS "fullName", s.phone, s.password,
+              s.last_issued_password AS "lastIssuedPassword", s.password_change_required AS "passwordChangeRequired",
+              s.is_active AS "isActive", s.role, s.address,
+              COALESCE(sl.status, CASE WHEN s.is_active THEN 'approved' ELSE 'blocked' END) AS "approvalStatus"
+       FROM stores s
+       LEFT JOIN store_link_requests sl ON sl.store_id = s.id
+       WHERE s.tenant_id = $1
+       ORDER BY s.id ASC`,
       [tenantId],
     );
     return result.rows as Store[];
@@ -282,8 +291,9 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            phone = $3,
            password = $4,
            last_issued_password = $5,
-           is_active = $6,
-           address = $7
+           password_change_required = $6,
+           is_active = $7,
+           address = $8
          WHERE id = $1
          RETURNING
            id,
@@ -292,6 +302,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
            phone,
            password,
            last_issued_password AS "lastIssuedPassword",
+           password_change_required AS "passwordChangeRequired",
            is_active AS "isActive",
            role,
            address`,
@@ -301,6 +312,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           payload.phone,
           payload.password,
           payload.lastIssuedPassword,
+          payload.passwordChangeRequired ?? false,
           payload.isActive ?? true,
           payload.address,
         ],
@@ -311,8 +323,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     const nextId = payload.id ?? (await this.getNextStoreId());
     const result = await this.query(
       `INSERT INTO stores
-        (id, tenant_id, full_name, phone, password, last_issued_password, is_active, role, address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'client', $8)
+        (id, tenant_id, full_name, phone, password, last_issued_password, password_change_required, is_active, role, address)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'client', $9)
        RETURNING
          id,
          tenant_id AS "tenantId",
@@ -320,6 +332,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          phone,
          password,
          last_issued_password AS "lastIssuedPassword",
+         password_change_required AS "passwordChangeRequired",
          is_active AS "isActive",
          role,
          address`,
@@ -330,6 +343,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         payload.phone,
         payload.password,
         payload.lastIssuedPassword,
+        payload.passwordChangeRequired ?? false,
         payload.isActive ?? true,
         payload.address,
       ],
@@ -383,12 +397,240 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return result.rows as BusinessAdmin[];
   }
 
-  async getOrders(): Promise<Order[]> {
+  async getStoreOwnerProfileByPhone(
+    phone: string,
+  ): Promise<StoreOwnerProfile | null> {
     const result = await this.query(
       `SELECT
           id,
+          full_name AS "fullName",
+          phone,
+          password,
+          last_issued_password AS "lastIssuedPassword",
+          is_verified AS "isVerified"
+       FROM store_owner_profiles
+       WHERE phone = $1
+       LIMIT 1`,
+      [phone],
+    );
+
+    return (result.rows[0] as StoreOwnerProfile | undefined) ?? null;
+  }
+
+  async saveStoreOwnerProfile(
+    phone: string,
+    fullName: string,
+    password: string,
+    visiblePassword: string,
+  ): Promise<StoreOwnerProfile> {
+    const existing = await this.getStoreOwnerProfileByPhone(phone);
+    if (existing) {
+      const result = await this.query(
+        `UPDATE store_owner_profiles
+         SET full_name = $2,
+             password = $3,
+             last_issued_password = $4,
+             is_verified = TRUE
+         WHERE phone = $1
+         RETURNING
+           id,
+           full_name AS "fullName",
+           phone,
+           password,
+           last_issued_password AS "lastIssuedPassword",
+           is_verified AS "isVerified"`,
+        [phone, fullName, password, visiblePassword],
+      );
+      return result.rows[0] as StoreOwnerProfile;
+    }
+
+    const result = await this.query(
+      `INSERT INTO store_owner_profiles
+        (full_name, phone, password, last_issued_password, is_verified)
+       VALUES ($1, $2, $3, $4, TRUE)
+       RETURNING
+         id,
+         full_name AS "fullName",
+         phone,
+         password,
+         last_issued_password AS "lastIssuedPassword",
+         is_verified AS "isVerified"`,
+      [fullName, phone, password, visiblePassword],
+    );
+    return result.rows[0] as StoreOwnerProfile;
+  }
+
+  async createOrResetStoreLinkRequest(
+    profileId: number,
+    tenantId: number,
+    tenantName: string,
+    store: Store,
+  ): Promise<StoreLinkRequest> {
+    const existing = await this.query(
+      `SELECT id
+       FROM store_link_requests
+       WHERE profile_id = $1 AND tenant_id = $2 AND store_id = $3
+       LIMIT 1`,
+      [profileId, tenantId, store.id],
+    );
+
+    if ((existing.rowCount ?? 0) > 0) {
+      const result = await this.query(
+        `UPDATE store_link_requests
+         SET status = 'pending',
+             store_name = $4,
+             phone = $5,
+             address = $6,
+             requested_at = $7,
+             approved_at = NULL
+         WHERE profile_id = $1 AND tenant_id = $2 AND store_id = $3
+         RETURNING
+           id,
+           profile_id AS "profileId",
+           tenant_id AS "tenantId",
+           tenant_name AS "tenantName",
+           store_id AS "storeId",
+           store_name AS "storeName",
+           phone,
+           address,
+           status,
+           requested_at AS "requestedAt",
+           approved_at AS "approvedAt"`,
+        [
+          profileId,
+          tenantId,
+          store.id,
+          store.fullName,
+          store.phone,
+          store.address,
+          new Date().toISOString(),
+        ],
+      );
+      return result.rows[0] as StoreLinkRequest;
+    }
+
+    const result = await this.query(
+      `INSERT INTO store_link_requests
+        (profile_id, tenant_id, tenant_name, store_id, store_name, phone, address, status, requested_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
+       RETURNING
+         id,
+         profile_id AS "profileId",
+         tenant_id AS "tenantId",
+         tenant_name AS "tenantName",
+         store_id AS "storeId",
+         store_name AS "storeName",
+         phone,
+         address,
+         status,
+         requested_at AS "requestedAt",
+         approved_at AS "approvedAt"`,
+      [
+        profileId,
+        tenantId,
+        tenantName,
+        store.id,
+        store.fullName,
+        store.phone,
+        store.address,
+        new Date().toISOString(),
+      ],
+    );
+    return result.rows[0] as StoreLinkRequest;
+  }
+
+  async getStoreLinkRequestsByPhone(
+    phone: string,
+    status?: 'pending' | 'approved' | 'rejected' | 'blocked',
+  ): Promise<StoreLinkRequest[]> {
+    const params: Array<string> = [phone];
+    let statusFilter = '';
+    if (status) {
+      params.push(status);
+      statusFilter = ' AND sl.status = $2';
+    }
+
+    const result = await this.query(
+      `SELECT
+          sl.id,
+          sl.profile_id AS "profileId",
+          sl.tenant_id AS "tenantId",
+          sl.tenant_name AS "tenantName",
+          sl.store_id AS "storeId",
+          sl.store_name AS "storeName",
+          sl.phone,
+          sl.address,
+          sl.status,
+          sl.requested_at AS "requestedAt",
+          sl.approved_at AS "approvedAt"
+       FROM store_link_requests sl
+       INNER JOIN store_owner_profiles sp ON sp.id = sl.profile_id
+       WHERE sp.phone = $1${statusFilter}
+       ORDER BY sl.id DESC`,
+      params,
+    );
+
+    return result.rows as StoreLinkRequest[];
+  }
+
+  async resolveStoreLinkRequest(
+    requestId: number,
+    approved: boolean,
+  ): Promise<StoreLinkRequest | null> {
+    const status = approved ? 'approved' : 'rejected';
+    const approvedAt = approved ? new Date().toISOString() : null;
+    const result = await this.query(
+      `UPDATE store_link_requests
+       SET status = $2,
+           approved_at = $3
+       WHERE id = $1
+       RETURNING
+         id,
+         profile_id AS "profileId",
+         tenant_id AS "tenantId",
+         tenant_name AS "tenantName",
+         store_id AS "storeId",
+         store_name AS "storeName",
+         phone,
+         address,
+         status,
+         requested_at AS "requestedAt",
+         approved_at AS "approvedAt"`,
+      [requestId, status, approvedAt],
+    );
+
+    return (result.rows[0] as StoreLinkRequest | undefined) ?? null;
+  }
+
+  async getApprovedStorePanelsByPhone(phone: string): Promise<StorePanelLink[]> {
+    const result = await this.query(
+      `SELECT
+          sl.tenant_id AS "tenantId",
+          sl.tenant_name AS "tenantName",
+          sl.store_id AS "storeId",
+          sl.store_name AS "storeName",
+          sl.phone,
+          sl.address,
+          CASE WHEN s.is_active THEN 'approved' ELSE 'blocked' END AS status
+       FROM store_link_requests sl
+       INNER JOIN store_owner_profiles sp ON sp.id = sl.profile_id
+       INNER JOIN stores s ON s.id = sl.store_id
+       WHERE sp.phone = $1 AND sl.status = 'approved'
+       ORDER BY sl.id DESC`,
+      [phone],
+    );
+
+    return result.rows as StorePanelLink[];
+  }
+
+  async getOrders(): Promise<Order[]> {
+    const result = await this.query(
+       `SELECT
+          id,
           tenant_id AS "tenantId",
           store_id AS "storeId",
+          batch_id AS "batchId",
+          batch_label AS "batchLabel",
           product_id AS "productId",
           product_name AS "productName",
           qty,
@@ -404,10 +646,12 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
   async getTenantOrders(tenantId: number): Promise<Order[]> {
     const result = await this.query(
-      `SELECT
+       `SELECT
           id,
           tenant_id AS "tenantId",
           store_id AS "storeId",
+          batch_id AS "batchId",
+          batch_label AS "batchLabel",
           product_id AS "productId",
           product_name AS "productName",
           qty,
@@ -426,12 +670,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
   async createOrder(order: Order): Promise<Order> {
     const result = await this.query(
       `INSERT INTO orders
-        (tenant_id, store_id, product_id, product_name, qty, price, customer_name, status, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        (tenant_id, store_id, batch_id, batch_label, product_id, product_name, qty, price, customer_name, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING
          id,
          tenant_id AS "tenantId",
          store_id AS "storeId",
+         batch_id AS "batchId",
+         batch_label AS "batchLabel",
          product_id AS "productId",
          product_name AS "productName",
          qty,
@@ -442,6 +688,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [
         order.tenantId ?? null,
         order.storeId ?? null,
+        order.batchId ?? null,
+        order.batchLabel ?? null,
         order.productId,
         order.productName,
         order.qty,
@@ -475,12 +723,14 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       for (const order of orders) {
         const result = await client.query(
           `INSERT INTO orders
-            (tenant_id, store_id, product_id, product_name, qty, price, customer_name, status, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            (tenant_id, store_id, batch_id, batch_label, product_id, product_name, qty, price, customer_name, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            RETURNING
              id,
              tenant_id AS "tenantId",
              store_id AS "storeId",
+             batch_id AS "batchId",
+             batch_label AS "batchLabel",
              product_id AS "productId",
              product_name AS "productName",
              qty,
@@ -491,6 +741,8 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
           [
             order.tenantId ?? null,
             order.storeId ?? null,
+            order.batchId ?? null,
+            order.batchLabel ?? null,
             order.productId,
             order.productName,
             order.qty,
@@ -582,7 +834,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
 
     await this.query(
       `UPDATE stores
-       SET password = $2, last_issued_password = $3
+       SET password = $2, last_issued_password = $3, password_change_required = TRUE
        WHERE id = $1`,
       [
         request.storeId,
@@ -632,6 +884,33 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     );
 
     return (result.rows[0] as Order | undefined) ?? null;
+  }
+
+  async updateOrderBatchStatus(
+    batchId: string,
+    status: OrderStatus,
+  ): Promise<Order[]> {
+    const result = await this.query(
+      `UPDATE orders
+       SET status = $2
+       WHERE batch_id = $1
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         store_id AS "storeId",
+         batch_id AS "batchId",
+         batch_label AS "batchLabel",
+         product_id AS "productId",
+         product_name AS "productName",
+         qty,
+         price,
+         customer_name AS "customerName",
+         status,
+         created_at AS "createdAt"`,
+      [batchId, status],
+    );
+
+    return result.rows as Order[];
   }
 
   async saveTenant(payload: SaveTenantPayload): Promise<Tenant> {
@@ -833,11 +1112,48 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
          phone,
          password,
          last_issued_password AS "lastIssuedPassword",
+         password_change_required AS "passwordChangeRequired",
+         is_active AS "isActive",
+         role,
+         address,
+         CASE WHEN $2 THEN 'approved' ELSE 'blocked' END AS "approvalStatus"`,
+      [storeId, isActive],
+    );
+
+    await this.query(
+      `UPDATE store_link_requests
+       SET status = $2
+       WHERE store_id = $1 AND status = 'approved'`,
+      [storeId, isActive ? 'approved' : 'blocked'],
+    );
+    return (result.rows[0] as Store | undefined) ?? null;
+  }
+
+  async updateStorePassword(
+    storeId: number,
+    passwordHash: string,
+    clearIssuedPassword: boolean,
+  ): Promise<Store | null> {
+    const result = await this.query(
+      `UPDATE stores
+       SET password = $2,
+           last_issued_password = CASE WHEN $3 THEN NULL ELSE last_issued_password END,
+           password_change_required = FALSE
+       WHERE id = $1
+       RETURNING
+         id,
+         tenant_id AS "tenantId",
+         full_name AS "fullName",
+         phone,
+         password,
+         last_issued_password AS "lastIssuedPassword",
+         password_change_required AS "passwordChangeRequired",
          is_active AS "isActive",
          role,
          address`,
-      [storeId, isActive],
+      [storeId, passwordHash, clearIssuedPassword],
     );
+
     return (result.rows[0] as Store | undefined) ?? null;
   }
 
@@ -879,9 +1195,10 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         id INTEGER PRIMARY KEY,
         tenant_id INTEGER NOT NULL REFERENCES tenants(id),
         full_name TEXT NOT NULL,
-        phone TEXT NOT NULL UNIQUE,
+        phone TEXT NOT NULL,
         password TEXT NOT NULL,
         last_issued_password TEXT NULL,
+        password_change_required BOOLEAN NOT NULL DEFAULT FALSE,
         is_active BOOLEAN NOT NULL DEFAULT TRUE,
         role TEXT NOT NULL,
         address TEXT NOT NULL
@@ -898,10 +1215,35 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
         role TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS store_owner_profiles (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        full_name TEXT NOT NULL,
+        phone TEXT NOT NULL UNIQUE,
+        password TEXT NOT NULL,
+        last_issued_password TEXT NULL,
+        is_verified BOOLEAN NOT NULL DEFAULT TRUE
+      );
+
+      CREATE TABLE IF NOT EXISTS store_link_requests (
+        id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        profile_id INTEGER NOT NULL REFERENCES store_owner_profiles(id),
+        tenant_id INTEGER NOT NULL REFERENCES tenants(id),
+        tenant_name TEXT NOT NULL,
+        store_id INTEGER NOT NULL REFERENCES stores(id),
+        store_name TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        address TEXT NOT NULL,
+        status TEXT NOT NULL,
+        requested_at TIMESTAMP NOT NULL,
+        approved_at TIMESTAMP NULL
+      );
+
       CREATE TABLE IF NOT EXISTS orders (
         id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         tenant_id INTEGER REFERENCES tenants(id),
         store_id INTEGER REFERENCES stores(id),
+        batch_id TEXT NULL,
+        batch_label TEXT NULL,
         product_id INTEGER NOT NULL REFERENCES products(id),
         product_name TEXT NOT NULL,
         qty INTEGER NOT NULL,
@@ -930,11 +1272,17 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       ALTER TABLE products ADD COLUMN IF NOT EXISTS low_stock_threshold INTEGER NOT NULL DEFAULT 10;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS tenant_id INTEGER NOT NULL DEFAULT 1;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
+      ALTER TABLE stores ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT FALSE;
       ALTER TABLE stores ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+      ALTER TABLE stores DROP CONSTRAINT IF EXISTS stores_phone_key;
       ALTER TABLE orders ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_id TEXT NULL;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS batch_label TEXT NULL;
       ALTER TABLE password_reset_requests ADD COLUMN IF NOT EXISTS tenant_id INTEGER DEFAULT 1;
       ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
       ALTER TABLE business_admins ADD COLUMN IF NOT EXISTS password_setup_required BOOLEAN NOT NULL DEFAULT FALSE;
+      ALTER TABLE store_owner_profiles ADD COLUMN IF NOT EXISTS last_issued_password TEXT NULL;
+      ALTER TABLE store_owner_profiles ADD COLUMN IF NOT EXISTS is_verified BOOLEAN NOT NULL DEFAULT TRUE;
     `);
   }
 
