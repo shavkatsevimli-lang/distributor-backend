@@ -11,6 +11,7 @@ import {
   CartOrderItemPayload,
   ChangeMarketPasswordPayload,
   ClientTopProduct,
+  CreateAdminRegistrationRequestPayload,
   CreateCartOrderPayload,
   CreateOrderPayload,
   ClientDashboard,
@@ -24,6 +25,8 @@ import {
   PasswordResetRequest,
   PasswordResetRequestPayload,
   Product,
+  RequestStoreLinkPayload,
+  ResolveAdminRegistrationRequestPayload,
   ResolvePasswordResetPayload,
   ResetAdminPasswordPayload,
   SaveProductPayload,
@@ -31,6 +34,7 @@ import {
   SaveTenantPayload,
   SetupStoreOwnerPasswordPayload,
   SetupBusinessAdminPasswordPayload,
+  AdminRegistrationRequest,
   StoreLinkRequest,
   StoreOwnerProfile,
   StorePanelLink,
@@ -68,6 +72,7 @@ export class AppService {
   private readonly passwordResetRequests: PasswordResetRequest[] = [];
   private readonly storeOwnerProfiles: StoreOwnerProfile[] = [];
   private readonly storeLinkRequests: StoreLinkRequest[] = [];
+  private readonly adminRegistrationRequests: AdminRegistrationRequest[] = [];
 
   private readonly ownerPhone = this.cleanText(process.env.OWNER_PHONE || '+998937344148');
   private ownerPasswordHash = this.protectPassword(
@@ -197,6 +202,115 @@ export class AppService {
           : admin?.lastIssuedPassword ?? this.visiblePassword(admin?.password ?? ''),
       };
     });
+  }
+
+  async getAdminRegistrationRequests(): Promise<AdminRegistrationRequest[]> {
+    return [...this.adminRegistrationRequests].sort((a, b) => b.id - a.id);
+  }
+
+  async createAdminRegistrationRequest(
+    payload: CreateAdminRegistrationRequestPayload,
+  ) {
+    const firmName = this.cleanText(payload.firmName);
+    const adminName = this.cleanText(payload.adminName);
+    const phone = this.cleanText(payload.phone);
+    const password = this.cleanText(payload.password);
+
+    if (!firmName || !adminName || !phone || password.length < 4) {
+      throw new BadRequestException(
+        'Firma nomi, admin ismi, telefon va kamida 4 belgili parol shart',
+      );
+    }
+
+    const existing = this.adminRegistrationRequests.find(
+      (item) =>
+        item.phone === phone &&
+        item.status === 'pending',
+    );
+    if (existing) {
+      return {
+        success: true,
+        message: 'So\'rov allaqachon yuborilgan. Super admin tasdiqlashini kuting.',
+        request: existing,
+      };
+    }
+
+    const request: AdminRegistrationRequest = {
+      id: this.adminRegistrationRequests.length + 1,
+      firmName,
+      adminName,
+      phone,
+      password: this.protectPassword(password),
+      status: 'pending',
+      requestedAt: new Date().toISOString(),
+      processedAt: null,
+      tenantId: null,
+    };
+    this.adminRegistrationRequests.push(request);
+
+    return {
+      success: true,
+      message: 'So\'rov super adminga yuborildi',
+      request,
+    };
+  }
+
+  async resolveAdminRegistrationRequest(
+    requestId: number,
+    approved: boolean,
+  ) {
+    const request = this.adminRegistrationRequests.find((item) => item.id === requestId);
+    if (!request) {
+      throw new BadRequestException('So\'rov topilmadi');
+    }
+
+    request.status = approved ? 'approved' : 'rejected';
+    request.processedAt = new Date().toISOString();
+
+    if (!approved) {
+      return {
+        success: true,
+        message: 'So\'rov rad qilindi',
+        request,
+      };
+    }
+
+    const result = await this.saveTenant({
+      name: request.firmName,
+      ownerName: request.adminName,
+      phone: request.phone,
+      isActive: true,
+      maxStores: 1000,
+      locale: 'uz',
+      adminFullName: request.adminName,
+      adminPhone: request.phone,
+      adminPassword: '',
+    });
+
+    const tenant = result.tenant;
+    if (tenant) {
+      request.tenantId = tenant.id;
+      if (this.databaseService.isEnabled()) {
+        await this.databaseService.setupBusinessAdminPassword(
+          request.phone,
+          request.password,
+        );
+      } else {
+        const admin = this.businessAdmins.find((item) => item.tenantId === tenant.id);
+        if (admin) {
+          admin.password = request.password;
+          admin.passwordSetupRequired = false;
+          admin.lastIssuedPassword = '';
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: 'So\'rov tasdiqlandi va admin panel ochildi',
+      request,
+      tenant,
+    };
   }
 
   async getOrders(): Promise<Order[]> {
@@ -621,12 +735,79 @@ export class AppService {
           id: this.platformOwner.id,
           fullName: this.platformOwner.fullName || 'Admin',
           phone: this.platformOwner.phone,
-          role: 'admin',
+          role: 'platform_owner',
           storeId: 0,
           bonusBalance: 0,
           tier: 'admin',
           tenantId: 1,
           tenantName: 'Avto Zakaz',
+          subscriptionEndsAt: null,
+          isBlocked: false,
+          mustChangePassword: false,
+        },
+      };
+    }
+
+    const businessAdmins = await this.loadBusinessAdmins();
+    const businessAdmin = businessAdmins.find(
+      (item) =>
+        item.phone === phone &&
+        !item.passwordSetupRequired &&
+        this.isPasswordMatch(password, item.password),
+    );
+    if (businessAdmin) {
+      const tenant = tenants.find((item) => item.id === businessAdmin.tenantId);
+      if (!tenant) {
+        return {
+          success: false,
+          message: 'Bu admin uchun firma topilmadi',
+        };
+      }
+      if (!this.isTenantAccessible(tenant)) {
+        return {
+          success: false,
+          message: 'Sizning admin panelingiz bloklangan.',
+        };
+      }
+
+      return {
+        success: true,
+        message: 'Login successful',
+        user: {
+          id: businessAdmin.id,
+          fullName: businessAdmin.fullName,
+          phone: businessAdmin.phone,
+          role: 'business_admin',
+          storeId: 0,
+          bonusBalance: 0,
+          tier: 'admin',
+          tenantId: businessAdmin.tenantId,
+          tenantName: tenant.name,
+          subscriptionEndsAt: tenant.subscriptionEndsAt,
+          isBlocked: false,
+          mustChangePassword: false,
+        },
+      };
+    }
+
+    const storeOwnerProfile = await this.loadStoreOwnerProfileByPhone(phone);
+    if (
+      storeOwnerProfile &&
+      this.isPasswordMatch(password, storeOwnerProfile.password)
+    ) {
+      return {
+        success: true,
+        message: 'Login successful',
+        user: {
+          id: storeOwnerProfile.id,
+          fullName: storeOwnerProfile.fullName,
+          phone: storeOwnerProfile.phone,
+          role: 'market_owner',
+          storeId: 0,
+          bonusBalance: 0,
+          tier: 'market',
+          tenantId: 0,
+          tenantName: null,
           subscriptionEndsAt: null,
           isBlocked: false,
           mustChangePassword: false,
@@ -689,9 +870,59 @@ export class AppService {
   }
 
   async setupStoreOwnerPassword(payload: SetupStoreOwnerPasswordPayload) {
-    throw new BadRequestException(
-      'Bu yo\'l yopilgan. Avval vaqtinchalik parol bilan kiring, keyin yangi parol qo\'ying.',
-    );
+    const phone = this.cleanText(payload.phone);
+    const fullName = this.cleanText(payload.fullName);
+    const newPassword = this.cleanText(payload.newPassword);
+
+    if (!phone || !fullName || newPassword.length < 4) {
+      throw new BadRequestException(
+        'Telefon, market nomi va kamida 4 belgili parol kiriting',
+      );
+    }
+
+    const passwordHash = this.protectPassword(newPassword);
+
+    if (this.databaseService.isEnabled()) {
+      const profile = await this.databaseService.saveStoreOwnerProfile(
+        phone,
+        fullName,
+        passwordHash,
+        '',
+      );
+      return {
+        success: true,
+        message: 'Market profili yaratildi',
+        profile,
+      };
+    }
+
+    const existing = this.storeOwnerProfiles.find((item) => item.phone === phone);
+    if (existing) {
+      existing.fullName = fullName;
+      existing.password = passwordHash;
+      existing.lastIssuedPassword = '';
+      existing.isVerified = true;
+      return {
+        success: true,
+        message: 'Market profili yangilandi',
+        profile: existing,
+      };
+    }
+
+    const profile: StoreOwnerProfile = {
+      id: this.storeOwnerProfiles.length + 1,
+      fullName,
+      phone,
+      password: passwordHash,
+      lastIssuedPassword: '',
+      isVerified: true,
+    };
+    this.storeOwnerProfiles.push(profile);
+    return {
+      success: true,
+      message: 'Market profili yaratildi',
+      profile,
+    };
   }
 
   async changeMarketPassword(payload: ChangeMarketPasswordPayload) {
@@ -775,6 +1006,126 @@ export class AppService {
     return this.getStoreLinkRequestsByPhone(cleanPhone, 'pending');
   }
 
+  async requestStoreOwnerLink(payload: RequestStoreLinkPayload) {
+    const phone = this.cleanText(payload.phone);
+    const firmQuery = this.cleanText(payload.firmQuery);
+
+    if (!phone || !firmQuery) {
+      throw new BadRequestException('Telefon va firma nomi yoki telefoni shart');
+    }
+
+    const profile = await this.loadStoreOwnerProfileByPhone(phone);
+    if (!profile) {
+      throw new BadRequestException('Avval market profili ochilishi kerak');
+    }
+
+    const tenants = await this.loadTenants();
+    const queryLower = firmQuery.toLowerCase();
+    const matchedTenants = tenants.filter(
+      (tenant) =>
+        tenant.phone === firmQuery ||
+        tenant.name.toLowerCase() === queryLower ||
+        tenant.name.toLowerCase().includes(queryLower),
+    );
+
+    if (matchedTenants.length === 0) {
+      throw new BadRequestException('Bu nom yoki telefon bo\'yicha firma topilmadi');
+    }
+
+    if (matchedTenants.length > 1) {
+      throw new BadRequestException('Bir nechta firma topildi. Aniqroq nom yozing');
+    }
+
+    const tenant = matchedTenants[0];
+    const stores = await this.loadStores();
+    let store =
+      stores.find((item) => item.tenantId === tenant.id && item.phone === phone) ?? null;
+
+    if (!store) {
+      const tempPassword = this.generateAdminPassword(phone);
+      const draft: SaveStorePayload = {
+        tenantId: tenant.id,
+        fullName: profile.fullName,
+        phone,
+        password: this.protectPassword(tempPassword),
+        lastIssuedPassword: tempPassword,
+        passwordChangeRequired: false,
+        isActive: false,
+        address: 'Tasdiq kutilmoqda',
+      };
+
+      if (this.databaseService.isEnabled()) {
+        store = await this.databaseService.saveStore(draft);
+      } else {
+        store = {
+          id: (await this.getNextStoreId()).nextId,
+          tenantId: tenant.id,
+          fullName: profile.fullName,
+          phone,
+          password: draft.password!,
+          lastIssuedPassword: tempPassword,
+          passwordChangeRequired: false,
+          isActive: false,
+          role: 'client',
+          address: 'Tasdiq kutilmoqda',
+          approvalStatus: 'pending',
+        };
+        this.stores.push(store);
+      }
+    }
+
+    if (this.databaseService.isEnabled()) {
+      await this.databaseService.setStoreAccess(store.id, false);
+      const request = await this.databaseService.createOrResetStoreLinkRequest(
+        profile.id,
+        tenant.id,
+        tenant.name,
+        store,
+      );
+      return {
+        success: true,
+        message: `${tenant.name} firmaga ulanish so'rovi yuborildi`,
+        request,
+      };
+    }
+
+    store.isActive = false;
+    store.approvalStatus = 'pending';
+    const existing = this.storeLinkRequests.find(
+      (item) =>
+        item.profileId === profile.id &&
+        item.tenantId === tenant.id &&
+        item.storeId === store!.id,
+    );
+    const request = existing ?? {
+      id: this.storeLinkRequests.length + 1,
+      profileId: profile.id,
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      storeId: store.id,
+      storeName: store.fullName,
+      phone: store.phone,
+      address: store.address,
+      status: 'pending' as const,
+      requestedAt: new Date().toISOString(),
+      approvedAt: null,
+    };
+    request.storeName = store.fullName;
+    request.address = store.address;
+    request.status = 'pending';
+    request.requestedAt = new Date().toISOString();
+    request.approvedAt = null;
+    if (!existing) {
+      this.storeLinkRequests.push(request);
+    }
+
+    return {
+      success: true,
+      message: `${tenant.name} firmaga ulanish so'rovi yuborildi`,
+      request,
+    };
+  }
+
   async resolveStoreOwnerApproval(requestId: number, approved: boolean) {
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new BadRequestException('Taklif ID xato');
@@ -788,6 +1139,7 @@ export class AppService {
       if (!request) {
         throw new BadRequestException('Taklif topilmadi');
       }
+      await this.databaseService.setStoreAccess(request.storeId, approved);
       return {
         success: true,
         message: approved
@@ -1077,7 +1429,10 @@ export class AppService {
     const fullName = this.cleanText(payload.fullName);
     const phone = this.cleanText(payload.phone);
     const address = this.cleanText(payload.address);
-    const stores = await this.loadStores();
+    const [stores, tenants] = await Promise.all([
+      this.loadStores(),
+      this.loadTenants(),
+    ]);
     const existing = payload.id
       ? stores.find((item) => item.id === Number(payload.id))
       : stores.find(
@@ -1110,13 +1465,28 @@ export class AppService {
       isActive: payload.isActive ?? existing?.isActive ?? true,
       address,
     };
+    const tenantName =
+      tenants.find((item) => item.id === (normalized.tenantId ?? 1))?.name ??
+      'Avto Zakaz';
+    const profile = await this.loadStoreOwnerProfileByPhone(phone);
 
     if (this.databaseService.isEnabled()) {
-      const store = await this.databaseService.saveStore(normalized);
+      let store = await this.databaseService.saveStore(normalized);
+      if (profile) {
+        store = (await this.databaseService.setStoreAccess(store.id, false)) ?? store;
+        await this.databaseService.createOrResetStoreLinkRequest(
+          profile.id,
+          store.tenantId,
+          tenantName,
+          store,
+        );
+      }
       return {
         success: true,
         message:
-          payload.id
+          profile
+            ? `Market saqlandi. ${store.phone} uchun tasdiq so'rovi yuborildi`
+            : payload.id
             ? `Market yangilandi. Login: ${store.phone}`
             : `Market qo'shildi. Login: ${store.phone}. Vaqtinchalik parol: ${temporaryPassword}`,
         store,
@@ -1134,11 +1504,46 @@ export class AppService {
         existing.lastIssuedPassword = temporaryPassword;
         existing.passwordChangeRequired = true;
       }
+      if (profile) {
+        existing.isActive = false;
+        existing.approvalStatus = 'pending';
+        const request =
+          this.storeLinkRequests.find(
+            (item) =>
+              item.profileId === profile.id &&
+              item.tenantId === existing.tenantId &&
+              item.storeId === existing.id,
+          ) ??
+          ({
+            id: this.storeLinkRequests.length + 1,
+            profileId: profile.id,
+            tenantId: existing.tenantId,
+            tenantName,
+            storeId: existing.id,
+            storeName: existing.fullName,
+            phone: existing.phone,
+            address: existing.address,
+            status: 'pending',
+            requestedAt: new Date().toISOString(),
+            approvedAt: null,
+          } as StoreLinkRequest);
+        request.storeName = existing.fullName;
+        request.phone = existing.phone;
+        request.address = existing.address;
+        request.status = 'pending';
+        request.requestedAt = new Date().toISOString();
+        request.approvedAt = null;
+        if (!this.storeLinkRequests.some((item) => item.id === request.id)) {
+          this.storeLinkRequests.push(request);
+        }
+      }
 
       return {
         success: true,
         message:
-          shouldResetToTemporary
+          profile
+            ? `Market saqlandi. ${existing.phone} uchun tasdiq so'rovi yuborildi`
+            : shouldResetToTemporary
             ? `Market uchun yangi vaqtinchalik parol berildi: ${temporaryPassword}`
             : `Market yangilandi. Login: ${existing.phone}`,
         store: existing,
@@ -1154,17 +1559,34 @@ export class AppService {
       password: passwordHash,
       lastIssuedPassword: temporaryPassword,
       passwordChangeRequired: true,
-      isActive: true,
+      isActive: !profile,
       role: 'client',
       address,
-      approvalStatus: 'approved',
+      approvalStatus: profile ? 'pending' : 'approved',
     };
     this.stores.push(store);
+    if (profile) {
+      this.storeLinkRequests.push({
+        id: this.storeLinkRequests.length + 1,
+        profileId: profile.id,
+        tenantId: store.tenantId,
+        tenantName,
+        storeId: store.id,
+        storeName: store.fullName,
+        phone: store.phone,
+        address: store.address,
+        status: 'pending',
+        requestedAt: new Date().toISOString(),
+        approvedAt: null,
+      });
+    }
 
     return {
       success: true,
       message:
-        `Market qo'shildi. Login: ${store.phone}. Vaqtinchalik parol: ${temporaryPassword}`,
+        profile
+          ? `Market qo'shildi va tasdiq so'rovi yuborildi`
+          : `Market qo'shildi. Login: ${store.phone}. Vaqtinchalik parol: ${temporaryPassword}`,
       store,
     };
   }
