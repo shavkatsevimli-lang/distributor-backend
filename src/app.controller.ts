@@ -17,7 +17,10 @@ import type {
   GrantSubscriptionPayload,
   LoginPayload,
   PasswordResetRequestPayload,
+  CreateAdminRegistrationRequestPayload,
   ResolvePasswordResetPayload,
+  RequestStoreLinkPayload,
+  ResolveAdminRegistrationRequestPayload,
   ResolveStoreLinkPayload,
   ResetAdminPasswordPayload,
   SaveProductPayload,
@@ -87,6 +90,11 @@ export class AppController {
   @Get('owner/tenants')
   getOwnerTenants() {
     return this.appService.getOwnerTenants();
+  }
+
+  @Get('owner/admin-registration-requests')
+  getAdminRegistrationRequests() {
+    return this.appService.getAdminRegistrationRequests();
   }
 
   @Get('orders')
@@ -180,6 +188,13 @@ export class AppController {
     return this.appService.requestPasswordReset(body);
   }
 
+  @Post('admin-registration-requests')
+  createAdminRegistrationRequest(
+    @Body() body: CreateAdminRegistrationRequestPayload,
+  ) {
+    return this.appService.createAdminRegistrationRequest(body);
+  }
+
   @Post('auth/business-admin/setup-password')
   setupBusinessAdminPassword(@Body() body: SetupBusinessAdminPasswordPayload) {
     return this.appService.setupBusinessAdminPassword(body);
@@ -188,6 +203,11 @@ export class AppController {
   @Post('auth/store-owner/setup-password')
   setupStoreOwnerPassword(@Body() body: SetupStoreOwnerPasswordPayload) {
     return this.appService.setupStoreOwnerPassword(body);
+  }
+
+  @Post('store-owner/link-requests')
+  requestStoreOwnerLink(@Body() body: RequestStoreLinkPayload) {
+    return this.appService.requestStoreOwnerLink(body);
   }
 
   @Post('auth/market/change-password')
@@ -263,5 +283,16 @@ export class AppController {
     @Body() body: SetTenantAccessPayload,
   ) {
     return this.appService.setTenantAccess(id, body);
+  }
+
+  @Patch('owner/admin-registration-requests/:id')
+  resolveAdminRegistrationRequest(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: ResolveAdminRegistrationRequestPayload,
+  ) {
+    return this.appService.resolveAdminRegistrationRequest(
+      id,
+      body.approved === true,
+    );
   }
 }

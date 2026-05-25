@@ -75,6 +75,18 @@ export interface StorePanelLink {
   status: 'approved' | 'blocked';
 }
 
+export interface AdminRegistrationRequest {
+  id: number;
+  firmName: string;
+  adminName: string;
+  phone: string;
+  password: string;
+  status: 'pending' | 'approved' | 'rejected';
+  requestedAt: string;
+  processedAt?: string | null;
+  tenantId?: number | null;
+}
+
 export interface Tenant {
   id: number;
   name: string;
@@ -295,6 +307,22 @@ export interface SetStoreAccessPayload {
 }
 
 export interface ResolveStoreLinkPayload {
+  approved?: boolean;
+}
+
+export interface RequestStoreLinkPayload {
+  phone?: string;
+  firmQuery?: string;
+}
+
+export interface CreateAdminRegistrationRequestPayload {
+  firmName?: string;
+  adminName?: string;
+  phone?: string;
+  password?: string;
+}
+
+export interface ResolveAdminRegistrationRequestPayload {
   approved?: boolean;
 }
 
