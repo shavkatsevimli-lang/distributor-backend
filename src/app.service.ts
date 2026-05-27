@@ -275,7 +275,45 @@ export class AppService {
       };
     }
 
+    const existingTenants = await this.loadTenants();
+    const existingTenant =
+      existingTenants.find((item) => item.phone === request.phone) ??
+      existingTenants.find((item) => item.name === request.firmName) ??
+      null;
+
+    if (this.databaseService.isEnabled()) {
+      const tenant = await this.databaseService.saveTenant({
+        id: existingTenant?.id,
+        name: request.firmName,
+        ownerName: request.adminName,
+        phone: request.phone,
+        isActive: true,
+        maxStores: 1000,
+        locale: 'uz',
+        adminFullName: request.adminName,
+        adminPhone: request.phone,
+        adminPassword: '',
+      });
+
+      await this.databaseService.saveBusinessAdmin(
+        tenant.id,
+        request.adminName,
+        request.phone,
+        request.password,
+        '',
+      );
+
+      request.tenantId = tenant.id;
+      return {
+        success: true,
+        message: 'So\'rov tasdiqlandi va admin panel ochildi',
+        request,
+        tenant,
+      };
+    }
+
     const result = await this.saveTenant({
+      id: existingTenant?.id,
       name: request.firmName,
       ownerName: request.adminName,
       phone: request.phone,
@@ -290,18 +328,11 @@ export class AppService {
     const tenant = result.tenant;
     if (tenant) {
       request.tenantId = tenant.id;
-      if (this.databaseService.isEnabled()) {
-        await this.databaseService.setupBusinessAdminPassword(
-          request.phone,
-          request.password,
-        );
-      } else {
-        const admin = this.businessAdmins.find((item) => item.tenantId === tenant.id);
-        if (admin) {
-          admin.password = request.password;
-          admin.passwordSetupRequired = false;
-          admin.lastIssuedPassword = '';
-        }
+      const admin = this.businessAdmins.find((item) => item.tenantId === tenant.id);
+      if (admin) {
+        admin.password = request.password;
+        admin.passwordSetupRequired = false;
+        admin.lastIssuedPassword = '';
       }
     }
 
