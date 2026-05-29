@@ -290,6 +290,9 @@ export class AppService {
         phone: request.phone,
         isActive: true,
         maxStores: 1000,
+        subscriptionEndsAt:
+          existingTenant?.subscriptionEndsAt ??
+          new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString(),
         locale: 'uz',
         adminFullName: request.adminName,
         adminPhone: request.phone,
@@ -2467,5 +2470,6 @@ export class AppService {
     return `Biznes panel saqlandi. Admin login: ${adminPhone}. Parolni biznes egasi o'zi yaratadi.`;
   }
 }
+
 
 
