@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   Logger,
   OnModuleDestroy,
@@ -458,6 +458,27 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
       [fullName, phone, password, visiblePassword],
     );
     return result.rows[0] as StoreOwnerProfile;
+  }
+
+  async updateStoreOwnerProfileName(
+    phone: string,
+    fullName: string,
+  ): Promise<StoreOwnerProfile | null> {
+    const result = await this.query(
+      `UPDATE store_owner_profiles
+       SET full_name = $2
+       WHERE phone = $1
+       RETURNING
+         id,
+         full_name AS "fullName",
+         phone,
+         password,
+         last_issued_password AS "lastIssuedPassword",
+         is_verified AS "isVerified"`,
+      [phone, fullName],
+    );
+
+    return (result.rows[0] as StoreOwnerProfile | undefined) ?? null;
   }
 
   async createOrResetStoreLinkRequest(
@@ -1505,3 +1526,4 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
     return `scrypt$${salt}$${hash}`;
   }
 }
+

@@ -1,4 +1,4 @@
-import {
+﻿import {
   Body,
   Controller,
   Delete,
@@ -27,6 +27,7 @@ import type {
   SaveStorePayload,
   SaveTenantPayload,
   SetupStoreOwnerPasswordPayload,
+  RenameStoreOwnerProfilePayload,
   SetupBusinessAdminPasswordPayload,
   SetStoreAccessPayload,
   SetTenantAccessPayload,
@@ -200,6 +201,11 @@ export class AppController {
     return this.appService.setupBusinessAdminPassword(body);
   }
 
+  @Patch('auth/store-owner/profile-name')
+  renameStoreOwnerProfile(@Body() body: RenameStoreOwnerProfilePayload) {
+    return this.appService.renameStoreOwnerProfile(body);
+  }
+
   @Post('auth/store-owner/setup-password')
   setupStoreOwnerPassword(@Body() body: SetupStoreOwnerPasswordPayload) {
     return this.appService.setupStoreOwnerPassword(body);
@@ -296,3 +302,5 @@ export class AppController {
     );
   }
 }
+
+

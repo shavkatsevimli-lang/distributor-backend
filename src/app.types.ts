@@ -1,4 +1,4 @@
-export type OrderStatus = 'new' | 'approved' | 'delivered';
+﻿export type OrderStatus = 'new' | 'approved' | 'delivered';
 
 export interface Product {
   id: number;
@@ -49,6 +49,11 @@ export interface StoreOwnerProfile {
   password: string;
   lastIssuedPassword?: string;
   isVerified: boolean;
+}
+
+export interface RenameStoreOwnerProfilePayload {
+  phone?: string;
+  fullName?: string;
 }
 
 export interface StoreLinkRequest {
@@ -337,3 +342,4 @@ export interface OwnerDashboard {
   expiringSoonTenants: Tenant[];
   monthlyRevenueForecast: number;
 }
+

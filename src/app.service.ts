@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   Injectable,
   UnauthorizedException,
@@ -26,6 +26,7 @@ import {
   PasswordResetRequestPayload,
   Product,
   RequestStoreLinkPayload,
+  RenameStoreOwnerProfilePayload,
   ResolveAdminRegistrationRequestPayload,
   ResolvePasswordResetPayload,
   ResetAdminPasswordPayload,
@@ -952,6 +953,48 @@ export class AppService {
     return {
       success: true,
       message: 'Market profili yaratildi',
+      profile,
+    };
+  }
+
+  async renameStoreOwnerProfile(payload: RenameStoreOwnerProfilePayload) {
+    const phone = this.cleanText(payload.phone);
+    const fullName = this.cleanText(payload.fullName);
+
+    if (!phone || !fullName) {
+      throw new BadRequestException('Telefon va market nomi kiritilishi shart');
+    }
+
+    const existing = await this.loadStoreOwnerProfileByPhone(phone);
+    if (!existing) {
+      throw new BadRequestException('Market profili topilmadi');
+    }
+
+    if (this.databaseService.isEnabled()) {
+      const updated = await this.databaseService.updateStoreOwnerProfileName(
+        phone,
+        fullName,
+      );
+      if (!updated) {
+        throw new BadRequestException('Market profili topilmadi');
+      }
+
+      return {
+        success: true,
+        message: 'Market nomi yangilandi',
+        profile: updated,
+      };
+    }
+
+    const profile = this.storeOwnerProfiles.find((item) => item.phone === phone);
+    if (!profile) {
+      throw new BadRequestException('Market profili topilmadi');
+    }
+
+    profile.fullName = fullName;
+    return {
+      success: true,
+      message: 'Market nomi yangilandi',
       profile,
     };
   }
@@ -2424,3 +2467,5 @@ export class AppService {
     return `Biznes panel saqlandi. Admin login: ${adminPhone}. Parolni biznes egasi o'zi yaratadi.`;
   }
 }
+
+
